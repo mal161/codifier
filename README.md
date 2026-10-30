@@ -2,7 +2,7 @@
 
 Codifier is an early-stage developer tool for understanding and navigating large codebases, including codebases produced with AI coding tools. It aims to connect architecture, implementation, dependencies, and evidence so developers can regain a reliable mental model of a system.
 
-The repository now has an initial pnpm/Turborepo workspace, graph-domain/contracts packages, SQLite persistence, an authenticated local agent/CLI, and the first local web codebase explorer. Its TypeScript/JavaScript analyzer inventories bounded inputs, resolves relative imports, inherited TS path aliases, and local workspace package exports, and emits evidence-backed file/declaration graph facts with conservative identity reconciliation. It also records nested declarations and bounded, syntax-backed JSX, HTTP-route, and re-export relationships. The web client can analyze a local repository, load a saved graph, search files/symbols, inspect relationship evidence and source locations, and open recorded locations in VS Code. The VS Code extension and cloud synchronization are not implemented yet. See the accepted [agent/stack ADR](docs/decisions/0006-local-companion-agent.md) and [project structure](docs/PROJECT_STRUCTURE.md).
+The repository now has an initial pnpm/Turborepo workspace, graph-domain/contracts packages, SQLite persistence, an authenticated local agent/CLI, and the first local web codebase explorer. Its TypeScript/JavaScript analyzer inventories bounded inputs, resolves relative imports, inherited TS path aliases, and local workspace package exports, and emits evidence-backed file/declaration graph facts with conservative identity reconciliation. It also records nested declarations and bounded, syntax-backed JSX, HTTP-route, and re-export relationships. The web client can analyze a local repository, load a saved graph, search files/symbols, explore a selected item's bounded relationship neighborhood in an interactive map or structured list, inspect evidence and source locations, and open recorded locations in VS Code. The VS Code extension and cloud synchronization are not implemented yet. See the accepted [agent/stack ADR](docs/decisions/0006-local-companion-agent.md) and [project structure](docs/PROJECT_STRUCTURE.md).
 
 ## Project documents
 
@@ -27,7 +27,7 @@ The repository now has an initial pnpm/Turborepo workspace, graph-domain/contrac
 
 ## Current status
 
-The first parser-backed analysis slice, initial project-aware import/identity support, and read-only local web explorer with VS Code source links are implemented. Broader TypeScript semantic analysis, incremental analysis, and the VS Code extension remain future milestones. See the [implementation plan](docs/IMPLEMENTATION_PLAN.md), [architecture decisions](docs/decisions/README.md), and [product requirements](docs/PRODUCT_REQUIREMENTS.md) for what remains open and deliberately deferred.
+The first parser-backed analysis slice, initial project-aware import/identity support, React Flow relationship-neighborhood view, and read-only local web explorer with VS Code source links are implemented. Whole-repository graph layouts, broader TypeScript semantic analysis, incremental analysis, and the VS Code extension remain future milestones. See the [implementation plan](docs/IMPLEMENTATION_PLAN.md), [architecture decisions](docs/decisions/README.md), and [product requirements](docs/PRODUCT_REQUIREMENTS.md) for what remains open and deliberately deferred.
 
 ## Local agent quick start
 

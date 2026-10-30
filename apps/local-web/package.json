@@ -14,13 +14,14 @@
   "dependencies": {
     "@codifier/contracts": "workspace:*",
     "@codifier/domain": "workspace:*",
+    "@xyflow/react": "12.12.0",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.1.12",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@tailwindcss/vite": "4.1.12",
     "tailwindcss": "4.1.12",
     "vite": "7.3.1"
   }

@@ -24,11 +24,12 @@ Research and write Codifier's own interface content around its developer workflo
 
 ### Explore a component or symbol
 
-1. The developer browses a map or equivalent structured tree/list and can search by name.
-2. Selecting an item shows its kind, parent/containing component when known, source files/ranges, relationships, evidence, and freshness.
-3. The developer chooses a source location.
-4. The editor opens the corresponding file and selects the recorded range.
-5. If the location is stale or unresolved, Codifier explains that state and offers re-analysis rather than navigating to a misleading location.
+1. The developer searches by name and switches between the structured Browse list and a React Flow relationship map.
+2. The map centers on the selected file or symbol and shows its direct relationships, with a bounded number of neighboring items so large repositories remain navigable.
+3. Selecting an item in either view shows its kind, parent/containing component when known, source files/ranges, relationships, evidence, and freshness.
+4. The developer chooses a source location.
+5. The editor opens the corresponding file and selects the recorded range.
+6. If the location is stale or unresolved, Codifier explains that state and offers re-analysis rather than navigating to a misleading location.
 
 ### Inspect dependencies
 
@@ -83,7 +84,7 @@ Complete source files are not uploaded by default. See [the local agent guide](e
 
 ## Accessibility and interaction requirements
 
-- Every graph interaction must have a keyboard-operable structured alternative.
+- Every graph interaction must have a keyboard-operable structured alternative; the Browse list remains available alongside the relationship map.
 - Source links must have meaningful accessible names and identify the target file/range.
 - Use text labels and non-color indicators for provenance, uncertainty, stale state, and errors.
 - Do not make hover or drag the only way to discover a relationship or action.

@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app.js";
+import "@xyflow/react/dist/style.css";
 import "./styles.css";
 
 const rootElement = document.getElementById("root");

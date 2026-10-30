@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   Evidence,
@@ -21,6 +21,11 @@ import { createVscodeUri } from "./navigation/vscode.js";
 
 const defaultAgentUrl = "http://127.0.0.1:4141";
 const maxVisibleEntities = 250;
+const NeighborhoodMap = lazy(() =>
+  import("./graph/neighborhood-map.js").then((module) => ({
+    default: module.NeighborhoodMap,
+  })),
+);
 
 export function App() {
   const [agentUrl, setAgentUrl] = useState(defaultAgentUrl);
@@ -32,6 +37,7 @@ export function App() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [mapDisplay, setMapDisplay] = useState<"browse" | "map">("browse");
   const [search, setSearch] = useState("");
   const [busyAction, setBusyAction] = useState<
     "connect" | "load" | "analyze" | null
@@ -445,6 +451,38 @@ export function App() {
                 value={search}
               />
             </label>
+            {snapshot && (
+              <div
+                aria-label="Map display"
+                className="mt-3 inline-flex rounded-lg border border-line bg-canvas p-1"
+                role="group"
+              >
+                <button
+                  aria-pressed={mapDisplay === "browse"}
+                  className={`rounded-md px-3 py-1.5 text-[11px] font-medium transition ${
+                    mapDisplay === "browse"
+                      ? "bg-white text-forest shadow-sm"
+                      : "text-muted hover:text-ink"
+                  }`}
+                  onClick={() => setMapDisplay("browse")}
+                  type="button"
+                >
+                  Browse list
+                </button>
+                <button
+                  aria-pressed={mapDisplay === "map"}
+                  className={`rounded-md px-3 py-1.5 text-[11px] font-medium transition ${
+                    mapDisplay === "map"
+                      ? "bg-white text-forest shadow-sm"
+                      : "text-muted hover:text-ink"
+                  }`}
+                  onClick={() => setMapDisplay("map")}
+                  type="button"
+                >
+                  Relationship map
+                </button>
+              </div>
+            )}
           </div>
 
           {analysis?.diagnostics.length ? (
@@ -454,47 +492,72 @@ export function App() {
             />
           ) : null}
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {visibleEntities.length > 0 ? (
-              <ul className="space-y-0.5">
-                {displayEntities.map((entity) => (
-                  <li key={entity.id}>
-                    <button
-                      aria-current={selectedEntity?.id === entity.id}
-                      className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition ${
-                        selectedEntity?.id === entity.id
-                          ? "bg-mist text-forest"
-                          : "text-ink hover:bg-canvas"
-                      }`}
-                      onClick={() => setSelectedEntityId(entity.id)}
-                      type="button"
-                    >
-                      <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border border-line bg-white text-[10px] font-semibold uppercase text-muted">
-                        {entity.kind === "file" ? "F" : "S"}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block break-words text-sm font-medium">
-                          {entity.name}
+          {mapDisplay === "map" && snapshot && selectedEntity ? (
+            <Suspense
+              fallback={
+                <div
+                  className="grid min-h-80 flex-1 place-items-center text-sm text-muted"
+                  role="status"
+                >
+                  Loading relationship map…
+                </div>
+              }
+            >
+              <NeighborhoodMap
+                onSelectEntity={(entityId) => {
+                  setSearch("");
+                  setSelectedEntityId(entityId);
+                }}
+                selectedEntity={selectedEntity}
+                snapshot={snapshot}
+              />
+            </Suspense>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {visibleEntities.length > 0 ? (
+                <ul className="space-y-0.5">
+                  {displayEntities.map((entity) => (
+                    <li key={entity.id}>
+                      <button
+                        aria-current={selectedEntity?.id === entity.id}
+                        className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+                          selectedEntity?.id === entity.id
+                            ? "bg-mist text-forest"
+                            : "text-ink hover:bg-canvas"
+                        }`}
+                        onClick={() => setSelectedEntityId(entity.id)}
+                        type="button"
+                      >
+                        <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border border-line bg-white text-[10px] font-semibold uppercase text-muted">
+                          {entity.kind === "file" ? "F" : "S"}
                         </span>
-                        <span className="mt-0.5 block truncate text-[11px] text-muted">
-                          {sourcePath(entity)}
+                        <span className="min-w-0 flex-1">
+                          <span className="block break-words text-sm font-medium">
+                            {entity.name}
+                          </span>
+                          <span className="mt-0.5 block truncate text-[11px] text-muted">
+                            {sourcePath(entity)}
+                          </span>
                         </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyExplorer hasSnapshot={snapshot !== null} search={search} />
-            )}
-            {visibleEntities.length > maxVisibleEntities && (
-              <p className="px-3 py-3 text-center text-[11px] leading-5 text-muted">
-                Showing the first {maxVisibleEntities} of{" "}
-                {visibleEntities.length} items. Refine your search to narrow the
-                list.
-              </p>
-            )}
-          </div>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyExplorer
+                  hasSnapshot={snapshot !== null}
+                  search={search}
+                />
+              )}
+              {visibleEntities.length > maxVisibleEntities && (
+                <p className="px-3 py-3 text-center text-[11px] leading-5 text-muted">
+                  Showing the first {maxVisibleEntities} of{" "}
+                  {visibleEntities.length} items. Refine your search to narrow
+                  the list.
+                </p>
+              )}
+            </div>
+          )}
           <div className="border-t border-line px-4 py-3 text-[11px] text-muted">
             {snapshot
               ? `Revision ${snapshot.revision ?? "not specified"} · ${snapshot.entities.length} graph entities`
