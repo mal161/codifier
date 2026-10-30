@@ -1,0 +1,68 @@
+# Project decision register
+
+This register captures decisions and proposals from the supplied Codifier project brief and its appended product design discussion. It separates clearly stated approvals from recommendations. The source text does not include reliable decision dates and is truncated during the data-governance discussion, so dates are recorded as **not stated** and incomplete items remain open or proposed.
+
+**Status meanings**
+
+- **Accepted**: the source text contains an explicit approval or an unambiguous confirmed-decision summary.
+- **Proposed**: recommended in the source, without a clear approval in the available text.
+- **Open**: needs a decision before implementation or the source is incomplete/ambiguous.
+- **Future**: accepted as a direction, but explicitly not an initial-release commitment.
+
+## Accepted decisions
+
+| ID | Decision | Consequences / constraints | Source status |
+|---|---|---|---|
+| D-001 | Maintain one canonical architecture graph with separate **intended** and **actual** states. | Compare design with implementation; a deviation is not automatically a defect, and intentional exceptions can be documented. | Explicitly confirmed. |
+| D-002 | Support manual, imported, and AI-assisted creation of intended architecture. | Imported and AI-assisted material needs provenance and review; do not silently treat suggestions as developer intent. | Included in confirmed-decision summary. |
+| D-003 | Synchronize analysis incrementally. | Reanalyze changed areas and retain unrelated graph identity/history where possible. | Included in confirmed-decision summary. |
+| D-004 | Give graph entities permanent UUIDs; use symbol fingerprints and evidence-based reconciliation to recognize entities across code changes. | A fingerprint is not an entity ID. Ambiguous identity changes require review or a new entity. | Explicitly confirmed. |
+| D-005 | Attach evidence/provenance to graph facts and distinguish source-observed facts, developer-confirmed intent, imported information, runtime/test evidence, and AI inference. | AI-inferred relationships remain labeled as inferences until developer review; retain rejected inferences. A test supports only the behavior it exercises. | Explicitly approved. |
+| D-006 | Keep versioned graph snapshots and incremental change events. | Associate with Git revisions when available, support uncommitted work, comparisons, and restoration by a new change without erasing history. | Explicitly confirmed. |
+| D-007 | Use static-first analysis; plan runtime instrumentation as a later capability. | Unknown dynamic relationships must remain unknown or inferred rather than being presented as resolved. | Explicitly approved. |
+| D-008 | Progressively build structural, semantic, and architectural analysis. | Structural and semantic evidence form the foundation; inferred architecture groupings stay distinguishable from developer-approved architecture. | Explicitly approved. |
+| D-009 | Use Tree-sitter for syntax analysis, language-specific semantic adapters for deeper resolution, and a common intermediate representation before graph ingestion. | The user-directed first target is TypeScript/JavaScript, prioritizing React and Express; exact supported constructs require fixture validation. | Explicitly approved analysis direction plus latest user language priority. |
+| D-010 | Include a multi-layered testing and validation strategy, with golden repositories central to analyzer quality. | Graph consistency, identity preservation, source-location accuracy, tenant isolation (if multi-tenant), and incremental synchronization are release-blocking quality concerns. Vitest/golden repos are the target; runner versions and detailed coverage remain to be established. | Approval recorded; tooling direction specified by user. |
+| D-011 | Use OpenTelemetry-compatible observability across local and cloud components. | Structured logs, metrics, tracing, correlation IDs, health checks, diagnostics, and sensitive-data redaction are product/platform requirements. | Explicitly approved. |
+| D-012 | Treat architecture history as durable data and plan backups, recovery, export, and controlled deletion. | The source specifies cloud PostgreSQL backup/PITR and local SQLite/pending-event protection as a direction; retention and recovery targets need definition. | Explicitly approved. |
+| D-013 | Use containerized cloud deployment and independently distributed cross-platform local agents. | Docker, managed PostgreSQL, object storage, and workers are described; Kubernetes is deferred until scale warrants it. | Explicitly approved. |
+| D-014 | Make architecture decision records first-class, versioned knowledge; repository Markdown remains authoritative for formal decisions. | Link decisions to affected graph elements and retrieve relevant decisions when planning changes. | Explicitly approved. |
+| D-015 | Run architecture simulations on isolated branches or temporary revisions. | Simulations must not silently alter approved intended or actual architecture; measured consequences and AI predictions remain distinct. | Explicitly approved. |
+| D-016 | Support phased architecture migration planning, with migration execution separate and consequential execution requiring developer approval. | Include dependency sequencing, compatibility checks, progress, validation, and rollback planning. | Explicitly approved. |
+| D-017 | Provide architecture benchmarking against standards, reference architectures, internal standards, and historical comparisons. | Report evidence, gaps, and recommendations; avoid simplistic universal rankings. | Approval language appears in source; surrounding exchange is irregular. Reconfirm before implementation. |
+| D-018 | Provide graph-connected architecture knowledge and learning, distinguishing verified knowledge from AI-generated explanations and unreviewed contributions. | Include walkthroughs, learning material, knowledge review, and freshness as longer-term capability. | Explicitly approved. |
+| D-019 | Preserve cloud-hosted SaaS as a later deployment direction, while the user-directed MVP is local-first with optional authenticated graph synchronization. | Keep the local agent useful offline; self-hosted/private-cloud/on-premises and air-gapped modes remain later deployment decisions. | Product direction plus latest explicit MVP requirement. |
+| D-020 | Use provider-independent entitlement/metering concepts and replaceable billing adapters; enforce entitlements server-side. | Keep local-first analysis useful within applicable license terms. Billing complexity should follow real usage evidence. | Explicitly approved as a product direction; not an initial-release commitment. |
+| D-021 | Allow validated, versioned organization customization of graph entities, relationships, metadata, workflows, rules, and views. | Customization cannot override graph integrity, tenant isolation, or security; arbitrary custom code stays outside the core platform. | Explicitly approved as a future platform direction. |
+| D-022 | Target WCAG 2.2 AA and design for localization, keyboard and screen-reader use, with accessible alternatives to graph visualizations. | Launch in English; keep localization possible. | Explicitly approved. |
+| D-023 | Provide structured product feedback and roadmap capabilities, separated from authoritative architecture data. | Feedback may inform product decisions but cannot itself change architecture truth. | Explicitly approved as a product direction. |
+| D-024 | Require a standalone local Node.js/TypeScript companion agent as the single owner of repository access, analysis, graph operations, SQLite persistence, and synchronization; CLI, VS Code, and local React web clients share it. | Local analysis works offline. Optional sync uses a durable outbox and an explicitly approved graph metadata/events contract; complete source files are not uploaded by default. Local REST/WebSockets require token authentication, loopback binding, and Host/Origin safeguards. | Explicit user direction; detailed in accepted ADR 0006. |
+| D-025 | Use the user-directed MVP technology set and ordered priorities recorded in ADR 0006 and the implementation plan. | pnpm/Turborepo, Commander, Fastify REST/WebSockets, Drizzle with SQLite/PostgreSQL, React/Vite/React Flow, Zod, Chokidar, and Pino are the target choices. Exact versions/native driver, account and sync policies, and cloud vendor remain open. | Explicit user direction; implementation/package choices still need validation. |
+
+## Proposed or unresolved decisions
+
+| ID | Topic | Current record | Next action |
+|---|---|---|---|
+| O-001 | MVP workflow and measurable success | The local-first MVP architecture and its core sequence are specified, but the first user task and numeric success targets are not finalized. | Validate a narrow initial repository-understanding workflow and define accuracy, latency, and resource targets. |
+| O-002 | Initial language coverage | TypeScript/JavaScript is the first target; React and Express conventions are prioritized. Python/Django/Flask are later. Exact semantic/framework coverage is not yet demonstrated. | Establish a supported-construct matrix and golden fixtures before claiming coverage. |
+| O-003 | Delivery surface | A standalone agent is required; CLI, VS Code extension, and local React web app are clients of the same agent. | Validate packaging and client pairing across supported operating systems; hosted browser access needs separate safeguards. |
+| O-004 | Application implementation stack | User-directed choices are recorded in accepted ADR 0006 and [TECH_STACK.md](TECH_STACK.md); the earlier VS Code-hosted proposal in ADR 0005 is superseded. | Validate versions, native module packaging, and framework/API contracts before scaffold. |
+| O-005 | Graph persistence and schema | SQLite + Drizzle local and PostgreSQL + Drizzle cloud are the user-directed target. Schema compatibility, migrations, conflict policy, and sync event model are not finalized. | Define versioned contracts, backend-specific migrations, and durability/idempotency tests. |
+| O-006 | Local persistence and synchronization | SQLite, offline operation, and a durable sync outbox are required MVP directions; exact retained data and error/recovery behavior remain open. | Define local retention, backup/export/deletion, retry, and recovery policies. |
+| O-007 | API contract | Fastify REST and WebSockets, authenticated for local clients, are user-directed. Zod runtime validation is selected; exact protocol versioning and OpenAPI generation remain implementation details. MCP remains later. | Specify the local API, token lifecycle, Host/Origin rules, and cloud sync authorization. |
+| O-008 | AI provider and source-data boundary | AI explanations/inference are central to the vision, but provider, opt-in, context limits, retention, and deployment are not settled. | Define a local/no-AI baseline and an explicit, user-controlled remote-AI policy. |
+| O-009 | Repository safety policy | Ignore rules, generated/vendor files, secrets, symlinks, file-size limits, and repository execution policy need product-level definitions. | Specify before implementing repository ingestion. |
+| O-010 | Data governance and compliance | The brief proposes classification, lineage, retention, residency, access governance, and evidence-backed regulatory mapping. The source ends before a decision/approval. | Treat as a proposal; define practical data-handling requirements first and do not claim legal compliance from automated checks. |
+| O-011 | Technical debt intelligence | A subsystem is recommended, but the approval in the source is incomplete and appears adjacent to a separate benchmarking approval. | Reconfirm whether this is in product scope and when. |
+| O-012 | Authentication, tenancy, and deployment security | Local agent token authentication and loopback/Host/Origin safeguards are required. Cloud user/workspace identity and authorization remain open. | Threat-model the local API; decide cloud identity, workspace ownership, and authorization before enabling sync. |
+| O-013 | Product name and positioning | “Codifier” is the workspace name; the pasted idea suggests codebase intelligence for AI-generated projects but no final brand/market decision. | Validate user need and competition before final positioning. |
+
+## Explicitly future or deferred directions
+
+The following are broad accepted product directions but should not be mistaken for initial-release scope: runtime analysis; architecture simulation and migration execution; enterprise deployment modes; subscriptions and billing; organization customization; broad accessibility/localization beyond the English first launch; benchmarking; knowledge sharing; and product-feedback/community systems. They require separate scope, privacy, security, and implementation decisions when prioritized.
+
+## Source and provenance notes
+
+- Source: the user's pasted project idea and its appended product design discussion, supplied earlier in this conversation.
+- The pasted material interleaves project intent, generated recommendations, and short approval replies. This register marks only clear approvals as accepted and flags mismatched exchanges for reconfirmation.
+- The attached `ai code simplifier.pdf` was not used to assert decisions because its contents were not available in readable form during the earlier review. If it is the PDR referred to, its requirements should be checked against this register and discrepancies recorded explicitly.

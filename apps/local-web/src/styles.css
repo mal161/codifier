@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #f5f6f3;
+  --color-forest: #285447;
+  --color-forest-dark: #1d4237;
+  --color-ink: #1d2421;
+  --color-line: #e6e9e4;
+  --color-mist: #edf3ee;
+  --color-muted: #78817b;
+  --color-good: #55a878;
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --shadow-card: 0 8px 30px rgb(22 37 29 / 4%);
+}
+
+@layer base {
+  html {
+    @apply min-w-80 scroll-smooth;
+  }
+
+  body {
+    @apply m-0 min-w-80 bg-canvas font-sans antialiased;
+  }
+
+  button,
+  input {
+    @apply font-sans;
+  }
+
+  button:not(:disabled) {
+    @apply cursor-pointer;
+  }
+
+  ::selection {
+    @apply bg-forest/20 text-ink;
+  }
+}

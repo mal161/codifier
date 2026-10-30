@@ -1,0 +1,30 @@
+{
+  "name": "@codifier/local-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "codifier": "./src/cli.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/cli.ts",
+    "start": "tsx src/cli.ts",
+    "lint": "eslint src test",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codifier/analysis-core": "workspace:*",
+    "@codifier/contracts": "workspace:*",
+    "@codifier/domain": "workspace:*",
+    "@codifier/storage": "workspace:*",
+    "@fastify/websocket": "11.3.4",
+    "commander": "15.0.0",
+    "fastify": "5.12.7"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2",
+    "tsx": "4.23.15",
+    "ws": "8.22.0"
+  }
+}
