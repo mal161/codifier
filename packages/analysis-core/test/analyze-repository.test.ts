@@ -29,6 +29,12 @@ const monorepoFixtureRoot = fileURLToPath(
     import.meta.url,
   ),
 );
+const reactExpressFixtureRoot = fileURLToPath(
+  new URL(
+    "../../../fixtures/golden-repositories/react-express-workspace",
+    import.meta.url,
+  ),
+);
 const temporaryDirectories: string[] = [];
 
 async function createTemporaryRepository(): Promise<string> {
@@ -438,6 +444,53 @@ describe("analyzeRepository", () => {
         }),
       ]),
     );
+    expect(report.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: "unresolved_local_import" }),
+    );
+    expect(report.canPersist).toBe(true);
+    expect(validateGraphSnapshot(report.snapshot)).toEqual([]);
+  });
+
+  it("uses each workspace project's TypeScript paths for import resolution", async () => {
+    const report = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: reactExpressFixtureRoot,
+    });
+    const fileId = (path: string): string | undefined =>
+      report.snapshot.entities.find(
+        (entity) => entity.kind === "file" && entity.name === path,
+      )?.id;
+    const importsBySource = new Map(
+      report.snapshot.relationships
+        .filter((relationship) => relationship.type === "IMPORTS")
+        .map((relationship) => [
+          relationship.sourceEntityId,
+          relationship.targetEntityId,
+        ]),
+    );
+    const webSourceId = fileId("apps/web/src/app.tsx");
+    const webImport = report.snapshot.relationships.find(
+      (relationship) =>
+        relationship.type === "IMPORTS" &&
+        relationship.sourceEntityId === webSourceId,
+    );
+    const webImportEvidence = report.snapshot.evidence.find(
+      (evidence) => evidence.id === webImport?.evidenceIds[0],
+    );
+
+    expect(importsBySource.get(webSourceId!)).toBe(
+      fileId("apps/web/src/components/Button.tsx"),
+    );
+    expect(importsBySource.get(fileId("apps/api/src/server.ts")!)).toBe(
+      fileId("apps/api/src/routes.ts"),
+    );
+    expect(webImportEvidence?.source).toMatchObject({
+      repositoryRelativePath: "apps/web/src/app.tsx",
+      range: {
+        start: { line: 1, column: 0 },
+        end: { line: 1, column: 45 },
+      },
+    });
     expect(report.diagnostics).not.toContainEqual(
       expect.objectContaining({ code: "unresolved_local_import" }),
     );

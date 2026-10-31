@@ -152,6 +152,12 @@ interface AnalyzerProjectConfig {
   diagnostics: AnalysisDiagnostic[];
 }
 
+interface ProjectConfigReadBudget {
+  contents: Map<string, string>;
+  totalBytes: number;
+  limitReached: boolean;
+}
+
 interface WorkspacePackage {
   name: string;
   rootPath: string;
@@ -247,7 +253,17 @@ export async function analyzeRepository(
     completedFiles: 0,
     totalFiles: null,
   });
-  const projectConfig = await loadProjectConfig(repositoryRoot, options.signal);
+  const projectConfigReadBudget: ProjectConfigReadBudget = {
+    contents: new Map(),
+    totalBytes: 0,
+    limitReached: false,
+  };
+  const projectConfig = await loadProjectConfig(
+    repositoryRoot,
+    options.signal,
+    "tsconfig.json",
+    projectConfigReadBudget,
+  );
   throwIfCancelled(options.signal);
   projectConfig.diagnostics.forEach(reportDiagnostic);
 
@@ -262,6 +278,41 @@ export async function analyzeRepository(
     options.signal,
     reportProgress,
   );
+  const projectConfigs = new Map<string, AnalyzerProjectConfig>([
+    [repositoryRoot, projectConfig],
+  ]);
+  const projectConfigCandidates = candidates
+    .filter(
+      (candidate) =>
+        candidate.relativePath.split("/").at(-1) === "tsconfig.json" &&
+        dirname(candidate.absolutePath) !== repositoryRoot,
+    )
+    .sort(
+      (left, right) =>
+        left.relativePath.split("/").length -
+        right.relativePath.split("/").length,
+    );
+  for (const candidate of projectConfigCandidates) {
+    throwIfCancelled(options.signal);
+    if (projectConfigs.size >= 32) {
+      reportDiagnostic({
+        code: "tsconfig_project_limit",
+        severity: "warning",
+        message:
+          "Only the first 32 repository TypeScript project configurations are used for import resolution.",
+        path: candidate.relativePath,
+      });
+      break;
+    }
+    const config = await loadProjectConfig(
+      repositoryRoot,
+      options.signal,
+      candidate.relativePath,
+      projectConfigReadBudget,
+    );
+    projectConfigs.set(dirname(candidate.absolutePath), config);
+    config.diagnostics.forEach(reportDiagnostic);
+  }
   const workspacePackages = new Map<string, WorkspacePackage>();
   const ambiguousWorkspacePackageNames = new Set<string>();
   const files: InventoryFile[] = [];
@@ -662,6 +713,11 @@ export async function analyzeRepository(
     }
 
     let importOrdinal = 0;
+    const fileProjectConfig = getProjectConfigForFile(
+      file,
+      repositoryRoot,
+      projectConfigs,
+    );
     for (const statement of file.sourceFile.statements) {
       const moduleSpecifier = getModuleSpecifier(statement);
       if (!moduleSpecifier) {
@@ -672,14 +728,17 @@ export async function analyzeRepository(
         file,
         moduleSpecifier,
         repositoryRoot,
-        projectConfig.compilerOptions,
+        fileProjectConfig.compilerOptions,
         filePaths,
         workspacePackages,
       );
       if (!targetPath) {
         if (
           !isRelativeSpecifier(moduleSpecifier) &&
-          !matchesTsPathAlias(moduleSpecifier, projectConfig.compilerOptions) &&
+          !matchesTsPathAlias(
+            moduleSpecifier,
+            fileProjectConfig.compilerOptions,
+          ) &&
           !workspacePackages.has(
             getWorkspacePackageName(moduleSpecifier) ?? "",
           ) &&
@@ -1811,12 +1870,38 @@ function matchesTsPathAlias(
   });
 }
 
+function getProjectConfigForFile(
+  file: InventoryFile,
+  repositoryRoot: string,
+  projectConfigs: Map<string, AnalyzerProjectConfig>,
+): AnalyzerProjectConfig {
+  let directory = dirname(file.absolutePath);
+  while (isWithinRoot(repositoryRoot, directory)) {
+    const config = projectConfigs.get(directory);
+    if (config) {
+      return config;
+    }
+    if (directory === repositoryRoot) {
+      break;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+  return projectConfigs.get(repositoryRoot)!;
+}
+
 async function loadProjectConfig(
   repositoryRoot: string,
   signal: AbortSignal | undefined,
+  configRelativePath: string,
+  budget: ProjectConfigReadBudget,
 ): Promise<AnalyzerProjectConfig> {
   const diagnostics: AnalysisDiagnostic[] = [];
-  const configPath = join(repositoryRoot, "tsconfig.json");
+  const root = resolve(repositoryRoot);
+  const configPath = resolve(root, configRelativePath);
   try {
     const configStat = await lstat(configPath);
     if (configStat.isSymbolicLink()) {
@@ -1825,7 +1910,7 @@ async function loadProjectConfig(
         severity: "warning",
         message:
           "Symbolic-link TypeScript configurations are not followed; default module resolution is used.",
-        path: "tsconfig.json",
+        path: configRelativePath,
       });
       return defaultProjectConfig(repositoryRoot, diagnostics);
     }
@@ -1840,21 +1925,17 @@ async function loadProjectConfig(
     diagnostics.push({
       code: "tsconfig_read_failed",
       severity: "warning",
-      message:
-        "tsconfig.json could not be read within the configuration size limit; default module resolution is used.",
-      path: "tsconfig.json",
+      message: `${configRelativePath} could not be read within the configuration size limit; default module resolution is used.`,
+      path: configRelativePath,
     });
     return defaultProjectConfig(repositoryRoot, diagnostics);
   }
 
   throwIfCancelled(signal);
-  const root = resolve(repositoryRoot);
   const maxConfigFiles = 32;
   const maxConfigBytes = 4_194_304;
-  const configContents = new Map<string, string>();
   const configReadFailures = new Set<string>();
-  let totalConfigBytes = 0;
-  let configLimitReached = false;
+  const limitReachedBeforeParse = budget.limitReached;
   const safeConfigPath = (fileName: string): string | null => {
     const absolutePath = resolve(fileName);
     if (!isWithinRoot(root, absolutePath)) {
@@ -1882,17 +1963,18 @@ async function loadProjectConfig(
         configReadFailures.add(fileName);
         return undefined;
       }
-      const cached = configContents.get(canonicalPath);
+      const cached = budget.contents.get(canonicalPath);
       if (cached !== undefined) {
         return cached;
       }
       try {
         const fileStat = statSync(canonicalPath);
         if (
-          configContents.size >= maxConfigFiles ||
-          totalConfigBytes + fileStat.size > maxConfigBytes
+          budget.contents.size >= maxConfigFiles ||
+          budget.totalBytes + fileStat.size > maxConfigBytes
         ) {
-          configLimitReached = true;
+          budget.limitReached = true;
+          configReadFailures.add(fileName);
           return undefined;
         }
         const contents = readBoundedConfigFile(canonicalPath, 1_048_576);
@@ -1900,8 +1982,8 @@ async function loadProjectConfig(
           configReadFailures.add(fileName);
           return undefined;
         }
-        totalConfigBytes += Buffer.byteLength(contents, "utf8");
-        configContents.set(canonicalPath, contents);
+        budget.totalBytes += Buffer.byteLength(contents, "utf8");
+        budget.contents.set(canonicalPath, contents);
         return contents;
       } catch {
         configReadFailures.add(fileName);
@@ -1928,13 +2010,13 @@ async function loadProjectConfig(
     },
   };
   const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, host);
-  if (configLimitReached) {
+  if (!limitReachedBeforeParse && budget.limitReached) {
     diagnostics.push({
       code: "tsconfig_read_limit",
       severity: "warning",
       message:
-        "TypeScript configuration inheritance exceeded the configured file or byte limit; some options may be unavailable.",
-      path: "tsconfig.json",
+        "Repository TypeScript configurations exceeded the shared file or byte limit; some project options may be unavailable.",
+      path: configRelativePath,
     });
   }
   if (configReadFailures.size > 0) {
@@ -1943,7 +2025,7 @@ async function loadProjectConfig(
       severity: "warning",
       message:
         "A TypeScript configuration could not be read safely; only available in-repository configuration options were applied.",
-      path: "tsconfig.json",
+      path: configRelativePath,
     });
   }
   if (!parsed) {
