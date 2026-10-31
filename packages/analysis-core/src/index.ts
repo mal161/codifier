@@ -769,7 +769,11 @@ export async function analyzeRepository(
     evidence,
     relationships,
   };
-  const invariantIssues = validateGraphSnapshot(snapshot);
+  const preservedSnapshot = preserveIntendedGraphItems(
+    snapshot,
+    options.previousSnapshot,
+  );
+  const invariantIssues = validateGraphSnapshot(preservedSnapshot);
   if (invariantIssues.length > 0) {
     throw new Error(
       `Analyzer generated an invalid graph snapshot: ${invariantIssues.map((issue) => issue.code).join(", ")}.`,
@@ -777,7 +781,7 @@ export async function analyzeRepository(
   }
 
   return {
-    snapshot,
+    snapshot: preservedSnapshot,
     coverage,
     diagnostics,
     diagnosticsTruncated,
@@ -787,6 +791,87 @@ export async function analyzeRepository(
       coverage.skippedFiles === 0 &&
       !coverage.truncated,
   };
+}
+
+export function preserveIntendedGraphItems(
+  snapshot: GraphSnapshot,
+  previousSnapshot: GraphSnapshot | null | undefined,
+): GraphSnapshot {
+  if (!previousSnapshot) {
+    return snapshot;
+  }
+  if (previousSnapshot.repositoryId !== snapshot.repositoryId) {
+    throw new Error("Cannot preserve intent across different repositories.");
+  }
+
+  const entities = [...snapshot.entities];
+  const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
+  for (const entity of previousSnapshot.entities) {
+    if (entity.state !== "intended") {
+      continue;
+    }
+    const existing = entitiesById.get(entity.id);
+    if (existing) {
+      if (JSON.stringify(existing) !== JSON.stringify(entity)) {
+        throw new Error(`Intended entity ID collision: ${entity.id}.`);
+      }
+      continue;
+    }
+    entities.push(entity);
+    entitiesById.set(entity.id, entity);
+  }
+
+  const relationships = [...snapshot.relationships];
+  const relationshipsById = new Map(
+    relationships.map((relationship) => [relationship.id, relationship]),
+  );
+  for (const relationship of previousSnapshot.relationships) {
+    if (
+      relationship.state !== "intended" ||
+      !entitiesById.has(relationship.sourceEntityId) ||
+      !entitiesById.has(relationship.targetEntityId)
+    ) {
+      continue;
+    }
+    const existing = relationshipsById.get(relationship.id);
+    if (existing) {
+      if (JSON.stringify(existing) !== JSON.stringify(relationship)) {
+        throw new Error(
+          `Intended relationship ID collision: ${relationship.id}.`,
+        );
+      }
+      continue;
+    }
+    relationships.push(relationship);
+    relationshipsById.set(relationship.id, relationship);
+  }
+
+  const evidence = [...snapshot.evidence];
+  const evidenceById = new Map(evidence.map((item) => [item.id, item]));
+  const referencedEvidenceIds = new Set([
+    ...entities
+      .filter((entity) => entity.state === "intended")
+      .flatMap((entity) => entity.evidenceIds),
+    ...relationships
+      .filter((relationship) => relationship.state === "intended")
+      .flatMap((relationship) => relationship.evidenceIds),
+  ]);
+  for (const item of previousSnapshot.evidence) {
+    if (!referencedEvidenceIds.has(item.id)) {
+      continue;
+    }
+    const existing = evidenceById.get(item.id);
+    if (existing) {
+      if (JSON.stringify(existing) !== JSON.stringify(item)) {
+        throw new Error(`Intended evidence ID collision: ${item.id}.`);
+      }
+      continue;
+    }
+    evidence.push(item);
+    evidenceById.set(item.id, item);
+  }
+
+  return { ...snapshot, entities, evidence, relationships };
 }
 
 async function resolveRepositoryRoot(repositoryRoot: string): Promise<string> {

@@ -23,6 +23,10 @@ The earlier VS Code-hosted stack recommendation is retained as [0005: Initial VS
 
 The current accepted architecture is [0006: Local companion agent and user-directed MVP stack](0006-local-companion-agent.md). It does not settle exact versions, cloud provider, account model, or sync retention/conflict policy.
 
+[0007: Local architecture-template catalog](0007-local-architecture-template-catalog.md) records the bounded local marketplace choice; it does not authorize remote listings, executable plugins, accounts, or payments.
+
+[0008: Evidence-backed architecture rules](0008-evidence-backed-architecture-rules.md) records the current built-in graph checks and their review-only semantics.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?

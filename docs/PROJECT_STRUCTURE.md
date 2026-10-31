@@ -2,7 +2,7 @@
 
 ## Status
 
-This is the target organization for the user-directed MVP monorepo. The pnpm workspace, shared tooling, graph `domain`/`contracts`, SQLite `storage`, initial `analysis-core`, `apps/local-agent` CLI/API, and first `apps/local-web` explorer are implemented. Deeper semantic analysis, a shared typed agent-client package, VS Code, and sync remain planned. Create additional folders incrementally as their milestone begins; do not add empty placeholder packages for deferred capabilities.
+This is the target organization for the user-directed MVP monorepo. The pnpm workspace, shared tooling, graph `domain`/`contracts`, SQLite `storage`, initial `analysis-core`, `apps/local-agent` CLI/API, and first `apps/local-web` explorer are implemented. The web client can author intended components and map them to observed code through the local agent; analysis-core preserves this intent during re-analysis. Deeper semantic analysis, a shared typed agent-client package, VS Code, and sync remain planned. Create additional folders incrementally as their milestone begins; do not add empty placeholder packages for deferred capabilities.
 
 The structure follows the standalone local-agent architecture and ordered milestones in the [implementation plan](IMPLEMENTATION_PLAN.md). Package boundaries are logical boundaries inside one pnpm/Turborepo workspace, not a requirement to deploy every package as a separate service.
 
@@ -157,7 +157,7 @@ Create the tree as implementation starts, not all at once:
 2. SQLite/PostgreSQL storage package and graph use cases.
 3. Local agent, authenticated REST/WebSockets, CLI, and agent client.
 4. TypeScript/JavaScript analysis packages, identity/evidence, and incremental jobs.
-5. Local web and VS Code clients, visualization, and exact source navigation. The local web explorer supports graph-to-source links through the VS Code URI handler; source-to-graph navigation and the VS Code extension remain future work.
+5. Local web and VS Code clients, visualization, and exact source navigation. The local web explorer supports graph-to-source links through the VS Code URI handler and source-location-to-graph lookup; editor-integrated source-to-graph navigation and the VS Code extension remain future work.
 6. Sync endpoints/outbox, intended/actual comparison, Git, and architecture rules according to the agreed MVP sequence.
 
 The [development setup](DEVELOPMENT_SETUP.md) documents how to run the current local agent and the remaining packaging, security, and policy decisions before expanding the scaffold.

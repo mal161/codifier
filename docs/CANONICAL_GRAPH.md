@@ -99,7 +99,7 @@ Line numbers are coordinates in a particular source revision, not permanent iden
 
 1. Every edge endpoint refers to an existing entity in the same graph scope.
 2. Every source-backed entity or edge has evidence that resolves to its recorded revision or is explicitly marked stale.
-3. Actual and intended state are never merged by visualization or persistence shortcuts.
+3. Actual and intended state are never merged by visualization or persistence shortcuts. An intended `MAPS_TO` relationship may explicitly connect an intended source to an actual target.
 4. An inference is never presented as a confirmed source fact.
 5. Partial analysis retains diagnostics and does not erase unrelated valid entities.
 6. Deleting or replacing graph content preserves the configured history and audit semantics.

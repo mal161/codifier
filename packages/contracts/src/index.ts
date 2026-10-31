@@ -4,7 +4,9 @@ import {
   type GraphEntity,
   type GraphRelationship,
   type GraphSnapshot,
+  type GitContext,
   type SourceLocator,
+  type ArchitectureRuleEvaluation,
 } from "@codifier/domain";
 import { z } from "zod";
 
@@ -98,11 +100,29 @@ export const graphRelationshipSchema: z.ZodType<GraphRelationship> = z
   })
   .strict();
 
+export const gitContextSchema: z.ZodType<GitContext> = z
+  .object({
+    commit: z
+      .string()
+      .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i)
+      .nullable(),
+    branch: z.string().min(1).max(256).nullable(),
+    workingTree: z.enum([
+      "clean",
+      "dirty",
+      "not-a-repository",
+      "unavailable",
+      "unknown",
+    ]),
+  })
+  .strict();
+
 export const graphSnapshotSchema: z.ZodType<GraphSnapshot> = z
   .object({
     schemaVersion: z.literal(1),
     repositoryId: uuidSchema,
     revision: z.string().min(1).nullable(),
+    gitContext: gitContextSchema.optional(),
     entities: z.array(graphEntitySchema),
     evidence: z.array(evidenceSchema),
     relationships: z.array(graphRelationshipSchema),
@@ -124,6 +144,78 @@ export const analyzeRepositoryRequestSchema = z
     revision: z.string().min(1).nullable().optional(),
   })
   .strict();
+
+export const intendedComponentRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
+export const intendedComponentMappingRequestSchema = z
+  .object({
+    entityId: uuidSchema,
+  })
+  .strict();
+
+export const architectureTemplateComponentSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    name: z.string().min(1).max(120),
+    description: z.string().min(1).max(500),
+  })
+  .strict();
+
+export const architectureTemplateSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    title: z.string().min(1).max(120),
+    description: z.string().min(1).max(1000),
+    category: z.string().min(1).max(80),
+    tags: z.array(z.string().min(1).max(40)).max(12),
+    version: z.string().regex(/^\d+\.\d+\.\d+$/),
+    publisher: z.string().min(1).max(80),
+    components: z.array(architectureTemplateComponentSchema).min(1).max(30),
+    installed: z.boolean(),
+  })
+  .strict();
+
+export const architectureTemplateCatalogSchema = z.array(
+  architectureTemplateSchema,
+);
+
+export const installArchitectureTemplateRequestSchema = z
+  .object({
+    templateId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  })
+  .strict();
+
+export const architectureRuleFindingSchema = z
+  .object({
+    ruleId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    title: z.string().min(1).max(120),
+    severity: z.enum(["info", "warning"]),
+    message: z.string().min(1).max(2_000),
+    entityIds: z.array(uuidSchema).max(10_000),
+    relationshipIds: z.array(uuidSchema).max(50_000),
+    evidenceIds: z.array(uuidSchema).max(50_000),
+  })
+  .strict();
+
+export const architectureRuleEvaluationSchema: z.ZodType<ArchitectureRuleEvaluation> =
+  z
+    .object({
+      repositoryId: uuidSchema,
+      revision: z.string().min(1).nullable(),
+      ruleSetVersion: z.literal("1.0.0"),
+      findings: z.array(architectureRuleFindingSchema),
+    })
+    .strict();
+
+export type ArchitectureTemplate = z.infer<typeof architectureTemplateSchema>;
+export type ArchitectureRuleFinding = z.infer<
+  typeof architectureRuleFindingSchema
+>;
+export type { ArchitectureRuleEvaluation };
 
 export const analysisJobPhaseSchema = z.enum([
   "inventory",

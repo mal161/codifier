@@ -92,6 +92,34 @@ describe("validateGraphSnapshot", () => {
     );
   });
 
+  it("allows intended MAPS_TO relationships from intent to actual code", () => {
+    const snapshot = validSnapshot();
+    const intendedEntityId = "b4a1d2e3-7f6a-4a5b-8c9d-0123456789ab";
+    const intendedEvidenceId = "b4a1d2e3-7f6a-4a5b-8c9d-1123456789ab";
+    snapshot.evidence.push({
+      id: intendedEvidenceId,
+      origin: "developer",
+      description: "Developer-authored component mapping.",
+    });
+    snapshot.entities.push({
+      id: intendedEntityId,
+      kind: "component",
+      name: "Core",
+      state: "intended",
+      evidenceIds: [intendedEvidenceId],
+    });
+    snapshot.relationships.push({
+      id: "b4a1d2e3-7f6a-4a5b-8c9d-2123456789ab",
+      sourceEntityId: intendedEntityId,
+      targetEntityId: firstEntityId,
+      type: "MAPS_TO",
+      state: "intended",
+      evidenceIds: [intendedEvidenceId],
+    });
+
+    expect(validateGraphSnapshot(snapshot)).toEqual([]);
+  });
+
   it("requires source locators to belong to the snapshot repository", () => {
     const snapshot = validSnapshot();
     snapshot.evidence[0]!.source!.repositoryId =

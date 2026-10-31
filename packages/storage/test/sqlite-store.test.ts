@@ -81,6 +81,83 @@ describe("SQLite graph store", () => {
     expect(secondStore.getGraph(repositoryId)).toEqual(createSnapshot());
   });
 
+  it("persists Git context", () => {
+    const databasePath = createTemporaryDatabasePath();
+    const store = openGraphStore(databasePath);
+    stores.push(store);
+    const snapshot = {
+      ...createSnapshot(),
+      gitContext: {
+        commit: "a".repeat(40),
+        branch: "feature/git-context",
+        workingTree: "dirty" as const,
+      },
+    };
+
+    store.replaceGraph(snapshot);
+
+    expect(store.getGraph(repositoryId)).toEqual(snapshot);
+  });
+
+  it("migrates a pre-Git repository snapshot without losing its revision", () => {
+    const databasePath = createTemporaryDatabasePath();
+    const legacyDatabase = new BetterSqlite3(databasePath);
+    legacyDatabase.exec(`
+      CREATE TABLE codifier_migrations (
+        id TEXT PRIMARY KEY NOT NULL,
+        applied_at INTEGER NOT NULL
+      );
+      INSERT INTO codifier_migrations (id, applied_at)
+        VALUES ('0001_initial_graph', 1);
+      CREATE TABLE repositories (
+        id TEXT PRIMARY KEY NOT NULL,
+        revision TEXT,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO repositories (id, revision, updated_at)
+        VALUES ('${repositoryId}', 'legacy-revision', 1);
+      CREATE TABLE evidence (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        description TEXT NOT NULL,
+        source_json TEXT
+      );
+      CREATE TABLE entities (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        state TEXT NOT NULL,
+        evidence_ids_json TEXT NOT NULL,
+        source_json TEXT
+      );
+      CREATE TABLE relationships (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL,
+        source_entity_id TEXT NOT NULL,
+        target_entity_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        state TEXT NOT NULL,
+        evidence_ids_json TEXT NOT NULL
+      );
+    `);
+    legacyDatabase.close();
+
+    const store = openGraphStore(databasePath);
+    stores.push(store);
+
+    const graph = store.getGraph(repositoryId);
+    expect(graph).toMatchObject({
+      repositoryId,
+      revision: "legacy-revision",
+      entities: [],
+      evidence: [],
+      relationships: [],
+    });
+    expect(graph).not.toHaveProperty("gitContext");
+  });
+
   it("rejects invalid snapshots without changing committed graph state", () => {
     const store = openGraphStore(createTemporaryDatabasePath());
     stores.push(store);

@@ -54,14 +54,28 @@ export interface GraphRelationship {
   evidenceIds: string[];
 }
 
+export interface GitContext {
+  commit: string | null;
+  branch: string | null;
+  workingTree:
+    "clean" | "dirty" | "not-a-repository" | "unavailable" | "unknown";
+}
+
 export interface GraphSnapshot {
   schemaVersion: 1;
   repositoryId: string;
   revision: string | null;
+  gitContext?: GitContext;
   entities: GraphEntity[];
   evidence: Evidence[];
   relationships: GraphRelationship[];
 }
+
+export {
+  evaluateArchitectureRules,
+  type ArchitectureRuleEvaluation,
+  type ArchitectureRuleFinding,
+} from "./architecture-rules.js";
 
 export interface GraphInvariantIssue {
   code: string;
@@ -134,6 +148,16 @@ export function validateGraphSnapshot(
       code: "invalid-snapshot-revision",
       path: "revision",
       message: "Snapshot revision must be non-empty or null.",
+    });
+  }
+  if (
+    snapshot.gitContext !== undefined &&
+    !isValidGitContext(snapshot.gitContext)
+  ) {
+    issues.push({
+      code: "invalid-git-context",
+      path: "gitContext",
+      message: "Git commit, branch, and working-tree context must be valid.",
     });
   }
 
@@ -238,18 +262,26 @@ export function validateGraphSnapshot(
       ["targetEntityId", relationship.targetEntityId],
     ] as const) {
       const entity = entityById.get(entityId);
+      const intendedMappingEndpoint =
+        relationship.type === "MAPS_TO" &&
+        relationship.state === "intended" &&
+        ((field === "sourceEntityId" && entity?.state === "intended") ||
+          (field === "targetEntityId" && entity?.state === "actual"));
       if (!entity) {
         issues.push({
           code: "missing-relationship-endpoint",
           path: `relationships[${index}].${field}`,
           message: `Relationship references missing entity ${entityId}.`,
         });
-      } else if (entity.state !== relationship.state) {
+      } else if (
+        entity.state !== relationship.state &&
+        !intendedMappingEndpoint
+      ) {
         issues.push({
           code: "state-mismatch",
           path: `relationships[${index}].${field}`,
           message:
-            "Relationship and endpoint entities must use the same architecture state.",
+            "Relationships must match endpoint states unless an intended MAPS_TO edge links intent to actual code.",
         });
       }
     }
@@ -329,6 +361,31 @@ function isValidUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
   );
+}
+
+function isValidGitContext(value: unknown): value is GitContext {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const context = value as Record<string, unknown>;
+  const validCommit =
+    context.commit === null ||
+    (typeof context.commit === "string" &&
+      /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(context.commit));
+  const validBranch =
+    context.branch === null ||
+    (typeof context.branch === "string" &&
+      context.branch.length > 0 &&
+      context.branch.length <= 256);
+  const validWorkingTree = [
+    "clean",
+    "dirty",
+    "not-a-repository",
+    "unavailable",
+    "unknown",
+  ].includes(String(context.workingTree));
+
+  return validCommit && validBranch && validWorkingTree;
 }
 
 function checkEvidenceReferences(

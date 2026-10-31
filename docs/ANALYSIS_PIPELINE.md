@@ -33,6 +33,8 @@ The AST adapter is a bounded first implementation, not a resolution of the broad
 
 The local agent also exposes authenticated analysis jobs for clients that need live progress or cancellation. A job reports inventory, reading, parsing, relationship-resolution, and persistence stages; clients poll its status and may cancel queued or running work. After a successful graph write, the job result includes counts of added, changed, and removed entities and relationships; the first saved graph is identified as an initial analysis. Results that are cancelled, failed, or incomplete do not include a change summary. The analyzer yields between directory batches and files so cancellation requests can be handled promptly. Cancellation never writes a partial graph. Job state is in memory, limited to two active jobs and 50 retained jobs total, and is discarded when the agent stops. The older synchronous analyze endpoints remain available for CLI compatibility.
 
+During analysis the local agent also reads Git metadata without executing repository code: commit ID, current branch when available, and whether the working tree is clean or dirty. The commit ID becomes the source revision unless the caller explicitly supplies a revision. Dirty trees are supported; recorded source ranges refer to the analyzed working tree and the commit records its HEAD baseline. Non-Git repositories remain analyzable, and Git metadata is stored only as graph context.
+
 ## Stage responsibilities
 
 ### 1. Repository selection and inventory

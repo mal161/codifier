@@ -18,7 +18,8 @@ Research and write Codifier's own interface content around its developer workflo
 2. The developer selects a repository; the agent confirms the authorized root and applies the documented file policy.
 3. The client requests analysis from the agent and shows progress/cancellation from authenticated local API events.
 4. The agent stores results locally and returns a map with coverage, supported languages, skipped files, and errors.
-5. If analysis is partial, the client retains valid results and clearly identifies gaps. This flow works offline.
+5. The client shows the Git commit, branch when available, and whether the working tree is clean or has uncommitted changes. A non-Git folder remains analyzable and is identified as such.
+6. If analysis is partial, the client retains valid results and clearly identifies gaps. This flow works offline.
 
 **Failure behavior:** invalid or inaccessible roots, cancellation, and analyzer failures produce actionable messages; they must not appear as successful empty maps.
 
@@ -26,10 +27,11 @@ Research and write Codifier's own interface content around its developer workflo
 
 1. The developer searches by name and switches between the structured Browse list and a React Flow relationship map.
 2. The map centers on the selected file or symbol and shows its direct relationships, with a bounded number of neighboring items so large repositories remain navigable.
-3. Selecting an item in either view shows its kind, parent/containing component when known, source files/ranges, relationships, evidence, and freshness.
-4. The developer chooses a source location.
-5. The editor opens the corresponding file and selects the recorded range.
-6. If the location is stale or unresolved, Codifier explains that state and offers re-analysis rather than navigating to a misleading location.
+3. The developer can enter a repository-relative `path:line[:column]` to find graph items whose recorded source ranges cover that position; matches are ordered from the narrowest range to the widest.
+4. Selecting an item in either view or a source-location match shows its kind, parent/containing component when known, source files/ranges, relationships, evidence, and freshness.
+5. The developer chooses a source location.
+6. The editor opens the corresponding file and selects the recorded range.
+7. If the location is stale or unresolved, Codifier explains that state and offers re-analysis rather than navigating to a misleading location.
 
 ### Inspect dependencies
 
@@ -45,6 +47,8 @@ Research and write Codifier's own interface content around its developer workflo
 3. It updates affected graph entities and relationships while retaining supported identities for unchanged items.
 4. It reports added, changed, removed, stale, unresolved, and failed items.
 5. If incremental state is inconsistent, it reports the issue and offers a full re-analysis.
+
+Git context is read-only metadata captured with the analyzed snapshot. A dirty working tree is allowed; source ranges describe the analyzed working tree and the recorded commit is its HEAD baseline.
 
 ## Later: ask an evidence-grounded question
 
@@ -66,13 +70,31 @@ This flow is blocked until provider, opt-in, credential, context, and retention 
 
 Complete source files are not uploaded by default. See [the local agent guide](engines/local-companion-agent.md) and [security and privacy](SECURITY_PRIVACY.md) for boundaries and safeguards.
 
-## Later: author or import intended architecture
+## MVP: author and compare intended architecture
 
-1. The developer creates a design item or imports a supported notation.
-2. Codifier records the author/source and import revision.
-3. Imported or AI-suggested items remain unreviewed until a developer confirms them.
-4. The developer maps intended elements to actual code and reviews evidence-backed gaps.
-5. An intentional deviation can be documented without rewriting actual observations.
+1. The developer creates an intended component in the local web explorer.
+2. Codifier records the component and each mapping as developer-authored evidence, separate from source-analysis facts.
+3. The developer selects an observed file or symbol and maps it to the selected intended component.
+4. An unmapped intended component remains visible as a design gap; mapped components show their linked code and provenance.
+5. Re-analysis retains authored components and valid mappings. A mapping is removed if its observed code entity no longer exists.
+6. Importing architecture notation, documenting deviations, and reviewing AI-suggested intent remain future capabilities.
+
+## Local marketplace: browse and install architecture templates
+
+1. The developer opens the Marketplace from the local web explorer; the authenticated local agent serves its bundled catalog.
+2. The developer filters templates by category or searches names, tags, and component descriptions.
+3. Before installing, the developer analyzes or loads a saved repository graph.
+4. Installing a template adds its components as intended graph entities with imported provenance. It does not create mappings or edit source files.
+5. Repeating an install is idempotent, and existing observed graph facts and Git context are preserved.
+6. This first slice has no remote service, accounts, payments, executable plugins, or install scripts. User-authored rule packs wait until a declarative format is supported.
+
+## MVP: review architecture-rule findings
+
+1. The developer loads or analyzes a repository and opens Rules in the local web explorer.
+2. The authenticated local agent evaluates a versioned set of explicit checks over the saved graph; repository source is not executed.
+3. Findings identify dependency cycles, code mapped to multiple intended components, and intended components without mapped code.
+4. Each finding cites the graph entities, relationships, and evidence used to produce it. The developer can navigate to a related graph item and inspect its source evidence.
+5. Findings are informational review prompts, not automatic design decisions, defects, or compliance claims. User-authored rule packs await a separate declarative format and review.
 
 ## Later: architecture-aware implementation planning
 

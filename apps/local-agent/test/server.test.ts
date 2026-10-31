@@ -1,10 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openGraphStore } from "@codifier/storage";
-import { analysisJobSchema, type AnalysisJob } from "@codifier/contracts";
+import {
+  analysisJobSchema,
+  architectureRuleEvaluationSchema,
+  type AnalysisJob,
+} from "@codifier/contracts";
 import { createAgentServer } from "../src/server.js";
 import { WebSocket } from "ws";
 import type { FastifyInstance } from "fastify";
@@ -165,6 +170,332 @@ describe("local agent API", () => {
     });
   });
 
+  it("installs bundled architecture templates idempotently as imported intent", async () => {
+    const { baseUrl } = await startTestServer();
+    const graphUrl = `${baseUrl}/v1/repositories/${repositoryId}/graph`;
+    const original = {
+      ...createSnapshot(),
+      gitContext: {
+        commit: "a".repeat(40),
+        branch: "main",
+        workingTree: "dirty" as const,
+      },
+    };
+    const put = await fetch(graphUrl, {
+      method: "PUT",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify(original),
+    });
+    expect(put.status).toBe(204);
+
+    const catalogResponse = await fetch(
+      `${baseUrl}/v1/marketplace/templates?repositoryId=${repositoryId}`,
+      { headers: headers() },
+    );
+    expect(catalogResponse.status).toBe(200);
+    const catalog = (await catalogResponse.json()) as Array<{
+      id: string;
+      installed: boolean;
+      components: Array<{ name: string }>;
+    }>;
+    const template = catalog[0]!;
+    expect(template.installed).toBe(false);
+
+    const installUrl = `${baseUrl}/v1/repositories/${repositoryId}/marketplace/templates`;
+    const install = () =>
+      fetch(installUrl, {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify({ templateId: template.id }),
+      });
+    const firstInstall = await install();
+    expect(firstInstall.status).toBe(200);
+    const installedSnapshot = await firstInstall.json();
+    const installedComponents = installedSnapshot.entities.filter(
+      (entity: { kind: string; state: string }) =>
+        entity.kind === "component" && entity.state === "intended",
+    );
+    expect(installedComponents).toHaveLength(template.components.length);
+    expect(
+      installedComponents.map((entity: { name: string }) => entity.name).sort(),
+    ).toEqual(template.components.map((component) => component.name).sort());
+    expect(installedSnapshot.entities).toContainEqual(original.entities[0]);
+    expect(installedSnapshot.gitContext).toEqual(original.gitContext);
+    expect(installedSnapshot.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          origin: "imported",
+          description: expect.stringContaining(template.id),
+        }),
+      ]),
+    );
+
+    const repeatedInstall = await install();
+    expect(repeatedInstall.status).toBe(200);
+    expect(await repeatedInstall.json()).toEqual(installedSnapshot);
+
+    const refreshedCatalog = await fetch(
+      `${baseUrl}/v1/marketplace/templates?repositoryId=${repositoryId}`,
+      { headers: headers() },
+    );
+    const refreshed = (await refreshedCatalog.json()) as Array<{
+      id: string;
+      installed: boolean;
+    }>;
+    expect(refreshed.find((item) => item.id === template.id)?.installed).toBe(
+      true,
+    );
+  });
+
+  it("rejects malformed, unknown, and unavailable architecture templates", async () => {
+    const { baseUrl } = await startTestServer();
+    const catalogResponse = await fetch(
+      `${baseUrl}/v1/marketplace/templates?repositoryId=invalid`,
+      { headers: headers() },
+    );
+    expect(catalogResponse.status).toBe(400);
+
+    const installUrl = `${baseUrl}/v1/repositories/${repositoryId}/marketplace/templates`;
+    const missingRepository = await fetch(installUrl, {
+      method: "POST",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify({ templateId: "layered-backend" }),
+    });
+    expect(missingRepository.status).toBe(404);
+
+    const malformedRequest = await fetch(installUrl, {
+      method: "POST",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify({ templateId: "not valid" }),
+    });
+    expect(malformedRequest.status).toBe(400);
+
+    const put = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/graph`,
+      {
+        method: "PUT",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify(createSnapshot()),
+      },
+    );
+    expect(put.status).toBe(204);
+
+    const unknownTemplate = await fetch(installUrl, {
+      method: "POST",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify({ templateId: "missing-template" }),
+    });
+    expect(unknownTemplate.status).toBe(404);
+    expect(await unknownTemplate.json()).toEqual({
+      error: "architecture_template_not_found",
+    });
+  });
+
+  it("evaluates architecture rules against the saved graph with evidence", async () => {
+    const { baseUrl } = await startTestServer();
+    const original = createSnapshot();
+    const secondEntityId = "8201f145-13bb-4a40-8d28-2e99458ab8bb";
+    const componentId = "b4a1d2e3-7f6a-4a5b-8c9d-0123456789ab";
+    const secondRelationshipId = "ae94e1f3-8a77-4de6-9957-562e07163ddd";
+    const mappingId = "be94e1f3-8a77-4de6-9957-562e07163ddd";
+    const graph = {
+      ...original,
+      entities: [
+        { ...original.entities[0]!, kind: "file" as const, name: "a.ts" },
+        {
+          ...original.entities[0]!,
+          id: secondEntityId,
+          kind: "file" as const,
+          name: "b.ts",
+        },
+        {
+          ...original.entities[0]!,
+          id: componentId,
+          kind: "component" as const,
+          name: "Core",
+          state: "intended" as const,
+        },
+      ],
+      relationships: [
+        {
+          id: "9e94e1f3-8a77-4de6-9957-562e07163ddd",
+          sourceEntityId: entityId,
+          targetEntityId: secondEntityId,
+          type: "IMPORTS",
+          state: "actual" as const,
+          evidenceIds: [evidenceId],
+        },
+        {
+          id: secondRelationshipId,
+          sourceEntityId: secondEntityId,
+          targetEntityId: entityId,
+          type: "DEPENDS_ON",
+          state: "actual" as const,
+          evidenceIds: [evidenceId],
+        },
+        {
+          id: mappingId,
+          sourceEntityId: componentId,
+          targetEntityId: entityId,
+          type: "MAPS_TO",
+          state: "intended" as const,
+          evidenceIds: [evidenceId],
+        },
+      ],
+    };
+    const put = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/graph`,
+      {
+        method: "PUT",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify(graph),
+      },
+    );
+    expect(put.status).toBe(204);
+
+    const response = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/architecture-rules`,
+      { headers: headers() },
+    );
+    expect(response.status).toBe(200);
+    const evaluation = architectureRuleEvaluationSchema.parse(
+      await response.json(),
+    );
+    expect(evaluation).toMatchObject({
+      repositoryId,
+      revision: graph.revision,
+      ruleSetVersion: "1.0.0",
+    });
+    expect(evaluation.findings).toContainEqual(
+      expect.objectContaining({
+        ruleId: "dependency-cycle",
+        relationshipIds: [
+          "9e94e1f3-8a77-4de6-9957-562e07163ddd",
+          secondRelationshipId,
+        ],
+        evidenceIds: [evidenceId],
+      }),
+    );
+    expect(evaluation.findings).not.toContainEqual(
+      expect.objectContaining({ ruleId: "unmapped-intended-component" }),
+    );
+  });
+
+  it("validates the architecture rule repository and requires a saved graph", async () => {
+    const { baseUrl } = await startTestServer();
+    const invalidRepositoryId = await fetch(
+      `${baseUrl}/v1/repositories/invalid/architecture-rules`,
+      { headers: headers() },
+    );
+    expect(invalidRepositoryId.status).toBe(400);
+
+    const missingGraph = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/architecture-rules`,
+      { headers: headers() },
+    );
+    expect(missingGraph.status).toBe(404);
+  });
+
+  it("creates intended components and idempotent mappings to actual code", async () => {
+    const { baseUrl } = await startTestServer();
+    const graphUrl = `${baseUrl}/v1/repositories/${repositoryId}/graph`;
+    const original = createSnapshot();
+    const actualGraph = {
+      ...original,
+      entities: [
+        {
+          ...original.entities[0]!,
+          kind: "file" as const,
+          name: "src/index.ts",
+        },
+      ],
+    };
+    const put = await fetch(graphUrl, {
+      method: "PUT",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify(actualGraph),
+    });
+    expect(put.status).toBe(204);
+
+    const invalidCreate = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/intended-components`,
+      {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify({ name: "   " }),
+      },
+    );
+    expect(invalidCreate.status).toBe(400);
+
+    const create = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/intended-components`,
+      {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify({ name: " Core services " }),
+      },
+    );
+    expect(create.status).toBe(200);
+    const createdSnapshot = await create.json();
+    const component = createdSnapshot.entities.find(
+      (entity: { kind: string; state: string }) =>
+        entity.kind === "component" && entity.state === "intended",
+    );
+    expect(component).toMatchObject({
+      name: "Core services",
+      state: "intended",
+      evidenceIds: [expect.any(String)],
+    });
+    expect(
+      createdSnapshot.evidence.find(
+        (item: { id: string }) => item.id === component.evidenceIds[0],
+      ),
+    ).toMatchObject({ origin: "developer" });
+
+    const mappingsUrl = `${baseUrl}/v1/repositories/${repositoryId}/intended-components/${component.id}/mappings`;
+    const missingEntity = await fetch(mappingsUrl, {
+      method: "POST",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify({
+        entityId: "a1b2c3d4-e5f6-4789-8abc-1234567890ab",
+      }),
+    });
+    expect(missingEntity.status).toBe(404);
+    expect(await missingEntity.json()).toEqual({
+      error: "actual_entity_not_found",
+    });
+
+    const mappingBody = JSON.stringify({ entityId });
+    const map = async () =>
+      fetch(mappingsUrl, {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: mappingBody,
+      });
+    const firstMapping = await map();
+    expect(firstMapping.status).toBe(200);
+    const mappedSnapshot = await firstMapping.json();
+    expect(mappedSnapshot.relationships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceEntityId: component.id,
+          targetEntityId: entityId,
+          type: "MAPS_TO",
+          state: "intended",
+        }),
+      ]),
+    );
+
+    const repeatedMapping = await map();
+    expect(repeatedMapping.status).toBe(200);
+    const repeatedSnapshot = await repeatedMapping.json();
+    expect(
+      repeatedSnapshot.relationships.filter(
+        (relationship: { type: string }) => relationship.type === "MAPS_TO",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("analyzes a local fixture through the authenticated agent and stores its graph", async () => {
     const { baseUrl } = await startTestServer();
     const root = await mkdtemp(join(tmpdir(), "codifier-agent-analysis-"));
@@ -213,6 +544,29 @@ describe("local agent API", () => {
       (entity: { kind: string; name: string }) =>
         entity.kind === "symbol" && entity.name === "greet",
     ).id;
+    const createIntent = await fetch(
+      `${baseUrl}/v1/repositories/${result.repositoryId}/intended-components`,
+      {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify({ name: "Greeting service" }),
+      },
+    );
+    expect(createIntent.status).toBe(200);
+    const authoredSnapshot = await createIntent.json();
+    const intendedComponent = authoredSnapshot.entities.find(
+      (entity: { kind: string; state: string }) =>
+        entity.kind === "component" && entity.state === "intended",
+    );
+    const createMapping = await fetch(
+      `${baseUrl}/v1/repositories/${result.repositoryId}/intended-components/${intendedComponent.id}/mappings`,
+      {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify({ entityId: firstFunctionId }),
+      },
+    );
+    expect(createMapping.status).toBe(200);
     await writeFile(
       join(root, "index.ts"),
       "export function greet(name: string) { return `Hi ${name}`; }\n",
@@ -240,6 +594,76 @@ describe("local agent API", () => {
       ).id,
     ).toBe(firstFunctionId);
     expect(updatedSnapshot.revision).toBe("next-revision");
+    expect(updatedSnapshot.entities).toContainEqual(
+      expect.objectContaining({
+        id: intendedComponent.id,
+        name: "Greeting service",
+        state: "intended",
+      }),
+    );
+    expect(updatedSnapshot.relationships).toContainEqual(
+      expect.objectContaining({
+        sourceEntityId: intendedComponent.id,
+        targetEntityId: firstFunctionId,
+        type: "MAPS_TO",
+        state: "intended",
+      }),
+    );
+  });
+
+  it("captures Git commit and dirty working-tree context during analysis", async () => {
+    const { baseUrl } = await startTestServer();
+    const root = await mkdtemp(join(tmpdir(), "codifier-agent-git-"));
+    temporaryDirectories.push(root);
+    execFileSync("git", ["-C", root, "init", "--quiet"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    execFileSync("git", ["-C", root, "config", "user.name", "Codifier test"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    execFileSync(
+      "git",
+      ["-C", root, "config", "user.email", "codifier-test@example.invalid"],
+      { stdio: "ignore", windowsHide: true },
+    );
+    await writeFile(join(root, "index.ts"), "export const value = 1;\n");
+    execFileSync("git", ["-C", root, "add", "index.ts"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    execFileSync("git", ["-C", root, "commit", "--quiet", "-m", "initial"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    const commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+      windowsHide: true,
+    }).trim();
+    await writeFile(join(root, "index.ts"), "export const value = 2;\n");
+
+    const analyze = await fetch(`${baseUrl}/v1/analyze`, {
+      method: "POST",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify({ rootPath: root }),
+    });
+    expect(analyze.status).toBe(200);
+    const result = await analyze.json();
+    expect(result).toMatchObject({ persisted: true });
+
+    const graph = await fetch(
+      `${baseUrl}/v1/repositories/${result.repositoryId}/graph`,
+      { headers: headers() },
+    );
+    expect(graph.status).toBe(200);
+    expect(await graph.json()).toMatchObject({
+      revision: commit,
+      gitContext: {
+        commit,
+        workingTree: "dirty",
+      },
+    });
   });
 
   it("does not replace a stored graph when repository analysis is incomplete", async () => {

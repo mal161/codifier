@@ -5,6 +5,7 @@ import type {
   GraphRelationship,
   GraphSnapshot,
 } from "@codifier/domain";
+import { evaluateArchitectureRules } from "@codifier/domain";
 import {
   analysisJobSchema,
   type AnalysisChangeSummary,
@@ -12,9 +13,13 @@ import {
   type AnalysisJobResult,
   analyzeRepositoryRequestSchema,
   graphSnapshotSchema,
+  installArchitectureTemplateRequestSchema,
+  intendedComponentMappingRequestSchema,
+  intendedComponentRequestSchema,
 } from "@codifier/contracts";
 import {
   analyzeRepository,
+  preserveIntendedGraphItems,
   RepositoryAnalysisCancelledError,
   RepositoryAnalysisError,
 } from "@codifier/analysis-core";
@@ -23,6 +28,13 @@ import { timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import type { GraphStore } from "@codifier/storage";
+import { readGitContext } from "./git-context.js";
+import {
+  findArchitectureTemplate,
+  listArchitectureTemplates,
+  templateComponentEntityId,
+  templateComponentEvidence,
+} from "./marketplace/catalog.js";
 
 export interface AgentServerOptions {
   token: string;
@@ -35,6 +47,10 @@ export interface AgentServerOptions {
 
 interface RepositoryParams {
   repositoryId: string;
+}
+
+interface IntendedComponentParams extends RepositoryParams {
+  componentId: string;
 }
 
 interface AnalysisJobParams {
@@ -130,6 +146,147 @@ export function createAgentServer(
 
   app.get("/v1/health", async () => ({ status: "ok" }));
 
+  app.get<{ Querystring: { repositoryId?: string } }>(
+    "/v1/marketplace/templates",
+    async (request, reply) => {
+      const repositoryId = request.query.repositoryId
+        ? parseRepositoryId(request.query.repositoryId)
+        : undefined;
+      if (request.query.repositoryId && !repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+
+      const snapshot = repositoryId
+        ? options.store.getGraph(repositoryId)
+        : undefined;
+      if (repositoryId && !snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      return listArchitectureTemplates(snapshot ?? undefined);
+    },
+  );
+
+  app.get<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/architecture-rules",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      return evaluateArchitectureRules(snapshot);
+    },
+  );
+
+  app.post<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/marketplace/templates",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      const parsed = installArchitectureTemplateRequestSchema.safeParse(
+        request.body,
+      );
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_architecture_template_request",
+          issues: parsed.error.issues.map(({ path, message }) => ({
+            path,
+            message,
+          })),
+        });
+      }
+
+      const template = findArchitectureTemplate(parsed.data.templateId);
+      if (!template) {
+        return reply
+          .code(404)
+          .send({ error: "architecture_template_not_found" });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+
+      const entities = [...snapshot.entities];
+      const evidenceItems = [...snapshot.evidence];
+      let changed = false;
+      for (const component of template.components) {
+        const entityId = templateComponentEntityId(
+          repositoryId,
+          template.id,
+          component.id,
+        );
+        const expectedEvidence = templateComponentEvidence(
+          repositoryId,
+          template.id,
+          component.id,
+          template.version,
+          component.description,
+        );
+        const existingEntity = entities.find(
+          (entity) => entity.id === entityId,
+        );
+        const existingEvidence = evidenceItems.find(
+          (evidence) => evidence.id === expectedEvidence.id,
+        );
+
+        if (
+          (existingEntity &&
+            (existingEntity.kind !== "component" ||
+              existingEntity.state !== "intended" ||
+              existingEntity.name !== component.name ||
+              !existingEntity.evidenceIds.includes(expectedEvidence.id))) ||
+          (existingEvidence &&
+            (existingEvidence.origin !== expectedEvidence.origin ||
+              existingEvidence.description !== expectedEvidence.description))
+        ) {
+          return reply.code(409).send({
+            error: "architecture_template_identity_conflict",
+          });
+        }
+
+        if (!existingEvidence) {
+          evidenceItems.push(expectedEvidence);
+          changed = true;
+        }
+        if (!existingEntity) {
+          entities.push({
+            id: entityId,
+            kind: "component",
+            name: component.name,
+            state: "intended",
+            evidenceIds: [expectedEvidence.id],
+          });
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        return snapshot;
+      }
+      const updatedSnapshot: GraphSnapshot = {
+        ...snapshot,
+        entities,
+        evidence: evidenceItems,
+      };
+      options.store.replaceGraph(updatedSnapshot);
+      const persistedSnapshot = options.store.getGraph(repositoryId);
+      if (!persistedSnapshot) {
+        throw new Error(
+          "The repository graph was unavailable after template installation.",
+        );
+      }
+      events.emit("graph.updated", repositoryId, persistedSnapshot.revision);
+      return persistedSnapshot;
+    },
+  );
+
   app.get<{ Params: RepositoryParams }>(
     "/v1/repositories/:repositoryId/graph",
     async (request, reply) => {
@@ -177,6 +334,137 @@ export function createAgentServer(
   );
 
   app.post<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/intended-components",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      const parsed = intendedComponentRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_intended_component",
+          issues: parsed.error.issues.map(({ path, message }) => ({
+            path,
+            message,
+          })),
+        });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+
+      const evidenceId = randomUUID();
+      const component: GraphEntity = {
+        id: randomUUID(),
+        kind: "component",
+        name: parsed.data.name,
+        state: "intended",
+        evidenceIds: [evidenceId],
+      };
+      const evidence = {
+        id: evidenceId,
+        origin: "developer" as const,
+        description: "Developer-authored intended component.",
+      };
+      const updatedSnapshot: GraphSnapshot = {
+        ...snapshot,
+        entities: [...snapshot.entities, component],
+        evidence: [...snapshot.evidence, evidence],
+      };
+      options.store.replaceGraph(updatedSnapshot);
+      events.emit("graph.updated", repositoryId, updatedSnapshot.revision);
+      return updatedSnapshot;
+    },
+  );
+
+  app.post<{ Params: IntendedComponentParams }>(
+    "/v1/repositories/:repositoryId/intended-components/:componentId/mappings",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      const componentId = parseRepositoryId(request.params.componentId);
+      if (!componentId) {
+        return reply.code(400).send({ error: "invalid_component_id" });
+      }
+      const parsed = intendedComponentMappingRequestSchema.safeParse(
+        request.body,
+      );
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_intended_component_mapping",
+          issues: parsed.error.issues.map(({ path, message }) => ({
+            path,
+            message,
+          })),
+        });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+
+      const component = snapshot.entities.find(
+        (entity) => entity.id === componentId,
+      );
+      if (
+        !component ||
+        component.kind !== "component" ||
+        component.state !== "intended"
+      ) {
+        return reply.code(404).send({ error: "intended_component_not_found" });
+      }
+      const actualEntity = snapshot.entities.find(
+        (entity) => entity.id === parsed.data.entityId,
+      );
+      if (
+        !actualEntity ||
+        actualEntity.state !== "actual" ||
+        (actualEntity.kind !== "file" && actualEntity.kind !== "symbol")
+      ) {
+        return reply.code(404).send({ error: "actual_entity_not_found" });
+      }
+
+      const existingMapping = snapshot.relationships.find(
+        (relationship) =>
+          relationship.sourceEntityId === componentId &&
+          relationship.targetEntityId === actualEntity.id &&
+          relationship.type === "MAPS_TO" &&
+          relationship.state === "intended",
+      );
+      if (existingMapping) {
+        return snapshot;
+      }
+
+      const evidenceId = randomUUID();
+      const evidence = {
+        id: evidenceId,
+        origin: "developer" as const,
+        description: `Developer mapped "${actualEntity.name}" to intended component "${component.name}".`,
+      };
+      const relationship: GraphRelationship = {
+        id: randomUUID(),
+        sourceEntityId: component.id,
+        targetEntityId: actualEntity.id,
+        type: "MAPS_TO",
+        state: "intended",
+        evidenceIds: [evidenceId],
+      };
+      const updatedSnapshot: GraphSnapshot = {
+        ...snapshot,
+        evidence: [...snapshot.evidence, evidence],
+        relationships: [...snapshot.relationships, relationship],
+      };
+      options.store.replaceGraph(updatedSnapshot);
+      events.emit("graph.updated", repositoryId, updatedSnapshot.revision);
+      return updatedSnapshot;
+    },
+  );
+
+  app.post<{ Params: RepositoryParams }>(
     "/v1/repositories/:repositoryId/analyze",
     async (request, reply) => {
       const repositoryId = parseRepositoryId(request.params.repositoryId);
@@ -196,15 +484,21 @@ export function createAgentServer(
       }
 
       try {
+        const gitContext = await readGitContext(parsed.data.rootPath);
         const report = await analyzeRepository({
           repositoryId,
           repositoryRoot: parsed.data.rootPath,
-          revision: parsed.data.revision,
+          revision: parsed.data.revision ?? gitContext.commit,
           previousSnapshot: options.store.getGraph(repositoryId),
         });
         if (report.canPersist) {
-          options.store.replaceGraph(report.snapshot);
-          events.emit("graph.updated", repositoryId, report.snapshot.revision);
+          const previousSnapshot = options.store.getGraph(repositoryId);
+          const snapshot = preserveIntendedGraphItems(
+            { ...report.snapshot, gitContext },
+            previousSnapshot,
+          );
+          options.store.replaceGraph(snapshot);
+          events.emit("graph.updated", repositoryId, snapshot.revision);
         }
         return {
           repositoryId,
@@ -238,15 +532,21 @@ export function createAgentServer(
 
     const repositoryId = randomUUID();
     try {
+      const gitContext = await readGitContext(parsed.data.rootPath);
       const report = await analyzeRepository({
         repositoryId,
         repositoryRoot: parsed.data.rootPath,
-        revision: parsed.data.revision,
+        revision: parsed.data.revision ?? gitContext.commit,
         previousSnapshot: options.store.getGraph(repositoryId),
       });
       if (report.canPersist) {
-        options.store.replaceGraph(report.snapshot);
-        events.emit("graph.updated", repositoryId, report.snapshot.revision);
+        const previousSnapshot = options.store.getGraph(repositoryId);
+        const snapshot = preserveIntendedGraphItems(
+          { ...report.snapshot, gitContext },
+          previousSnapshot,
+        );
+        options.store.replaceGraph(snapshot);
+        events.emit("graph.updated", repositoryId, snapshot.revision);
       }
       return {
         repositoryId,
@@ -447,10 +747,11 @@ async function executeAnalysisJob(
   record.value.status = "running";
   try {
     const previousSnapshot = store.getGraph(record.value.repositoryId);
+    const gitContext = await readGitContext(repositoryRoot);
     const report = await analyzeRepository({
       repositoryId: record.value.repositoryId,
       repositoryRoot,
-      revision,
+      revision: revision ?? gitContext.commit,
       previousSnapshot,
       signal: record.controller.signal,
       onProgress: (progress) => {
@@ -466,6 +767,8 @@ async function executeAnalysisJob(
     }
 
     let persisted = false;
+    let persistedSnapshot = report.snapshot;
+    let changeSummaryBase = previousSnapshot;
     if (report.canPersist) {
       record.value.progress = {
         phase: "persisting",
@@ -477,7 +780,12 @@ async function executeAnalysisJob(
         markJobCancelled(record.value);
         return;
       }
-      store.replaceGraph(report.snapshot);
+      changeSummaryBase = store.getGraph(record.value.repositoryId);
+      persistedSnapshot = preserveIntendedGraphItems(
+        { ...report.snapshot, gitContext },
+        changeSummaryBase,
+      );
+      store.replaceGraph(persistedSnapshot);
       persisted = true;
     }
     const result: AnalysisJobResult = {
@@ -488,8 +796,8 @@ async function executeAnalysisJob(
       ...(persisted
         ? {
             changeSummary: summarizeGraphChanges(
-              previousSnapshot,
-              report.snapshot,
+              changeSummaryBase,
+              persistedSnapshot,
             ),
           }
         : {}),
@@ -507,7 +815,7 @@ async function executeAnalysisJob(
         events.emit(
           "graph.updated",
           record.value.repositoryId,
-          report.snapshot.revision,
+          persistedSnapshot.revision,
         );
       } catch (error) {
         logger.warn(

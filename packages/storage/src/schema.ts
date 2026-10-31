@@ -10,6 +10,7 @@ import {
 export const repositories = sqliteTable("repositories", {
   id: text("id").primaryKey(),
   revision: text("revision"),
+  gitContextJson: text("git_context_json"),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 

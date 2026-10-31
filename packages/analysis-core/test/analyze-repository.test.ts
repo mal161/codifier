@@ -118,6 +118,104 @@ describe("analyzeRepository", () => {
     expect(first.snapshot).toEqual(second.snapshot);
   });
 
+  it("preserves intended components and mappings while dropping mappings to removed code", async () => {
+    const root = await createTemporaryRepository();
+    await writeFile(join(root, "current.ts"), "export const current = 1;\n");
+    await writeFile(join(root, "obsolete.ts"), "export const obsolete = 2;\n");
+
+    const initial = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+      revision: "initial",
+    });
+    const obsoleteFile = initial.snapshot.entities.find(
+      (entity) => entity.kind === "file" && entity.name === "obsolete.ts",
+    );
+    expect(obsoleteFile).toBeDefined();
+    const componentId = "b4a1d2e3-7f6a-4a5b-8c9d-0123456789ab";
+    const componentEvidenceId = "b4a1d2e3-7f6a-4a5b-8c9d-1123456789ab";
+    const mappingEvidenceId = "b4a1d2e3-7f6a-4a5b-8c9d-2123456789ab";
+    const authoredSnapshot = {
+      ...initial.snapshot,
+      entities: [
+        ...initial.snapshot.entities,
+        {
+          id: componentId,
+          kind: "component" as const,
+          name: "Inventory",
+          state: "intended" as const,
+          evidenceIds: [componentEvidenceId],
+        },
+      ],
+      evidence: [
+        ...initial.snapshot.evidence,
+        {
+          id: componentEvidenceId,
+          origin: "developer" as const,
+          description: "Developer-authored intended component.",
+        },
+        {
+          id: mappingEvidenceId,
+          origin: "developer" as const,
+          description: "Developer mapped obsolete code to Inventory.",
+        },
+      ],
+      relationships: [
+        ...initial.snapshot.relationships,
+        {
+          id: "b4a1d2e3-7f6a-4a5b-8c9d-3123456789ab",
+          sourceEntityId: componentId,
+          targetEntityId: obsoleteFile!.id,
+          type: "MAPS_TO",
+          state: "intended" as const,
+          evidenceIds: [mappingEvidenceId],
+        },
+      ],
+    };
+
+    const retained = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+      revision: "retained",
+      previousSnapshot: authoredSnapshot,
+    });
+    expect(retained.snapshot.entities).toContainEqual(
+      expect.objectContaining({
+        id: componentId,
+        name: "Inventory",
+        state: "intended",
+      }),
+    );
+    expect(retained.snapshot.relationships).toContainEqual(
+      expect.objectContaining({
+        sourceEntityId: componentId,
+        targetEntityId: obsoleteFile!.id,
+        type: "MAPS_TO",
+        state: "intended",
+      }),
+    );
+    expect(validateGraphSnapshot(retained.snapshot)).toEqual([]);
+
+    await rm(join(root, "obsolete.ts"));
+    const refreshed = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+      revision: "removed",
+      previousSnapshot: retained.snapshot,
+    });
+    expect(refreshed.snapshot.entities).toContainEqual(
+      expect.objectContaining({ id: componentId, state: "intended" }),
+    );
+    expect(
+      refreshed.snapshot.relationships.some(
+        (relationship) =>
+          relationship.sourceEntityId === componentId &&
+          relationship.type === "MAPS_TO",
+      ),
+    ).toBe(false);
+    expect(validateGraphSnapshot(refreshed.snapshot)).toEqual([]);
+  });
+
   it("reports analysis phases and cooperatively stops when cancelled", async () => {
     const root = await createTemporaryRepository();
     await writeFile(join(root, "first.ts"), "export const first = 1;\n");

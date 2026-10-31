@@ -1,6 +1,7 @@
 import {
   validateGraphSnapshot,
   type Evidence,
+  type GitContext,
   type GraphEntity,
   type GraphRelationship,
   type GraphSnapshot,
@@ -98,6 +99,14 @@ function createGraphStore(
         schemaVersion: 1,
         repositoryId,
         revision: repository.revision,
+        ...(repository.gitContextJson
+          ? {
+              gitContext: parseJson<GitContext>(
+                repository.gitContextJson,
+                "Git context",
+              ),
+            }
+          : {}),
         evidence: evidenceRows.map((row): Evidence => ({
           id: row.id,
           origin: row.origin as Evidence["origin"],
@@ -156,12 +165,18 @@ function createGraphStore(
           .values({
             id: snapshot.repositoryId,
             revision: snapshot.revision,
+            gitContextJson: snapshot.gitContext
+              ? JSON.stringify(snapshot.gitContext)
+              : null,
             updatedAt: new Date(),
           })
           .onConflictDoUpdate({
             target: repositories.id,
             set: {
               revision: snapshot.revision,
+              gitContextJson: snapshot.gitContext
+                ? JSON.stringify(snapshot.gitContext)
+                : null,
               updatedAt: new Date(),
             },
           })

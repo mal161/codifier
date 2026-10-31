@@ -53,6 +53,14 @@ const migrations: Migration[] = [
         ON relationships(repository_id, target_entity_id)`,
     ],
   },
+  {
+    id: "0002_repository_git_context",
+    statements: [
+      `ALTER TABLE repositories
+        ADD COLUMN git_context_json TEXT
+        CHECK (git_context_json IS NULL OR json_valid(git_context_json))`,
+    ],
+  },
 ];
 
 export function applyMigrations(database: BetterSqlite3.Database): void {

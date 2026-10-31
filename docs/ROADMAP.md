@@ -27,4 +27,4 @@ The initial analyzer target prioritizes React and Express conventions. Python/Dj
 
 ## Later possibilities
 
-Advanced AI orchestration, runtime tracing, multi-agent execution, broad collaboration, MCP write access, plugins, enterprise deployment, billing, compliance, customization, and knowledge sharing should follow demonstrated demand and separate decisions. Intended/actual comparison, Git context, and basic architecture rules are part of the user-directed MVP, not deferred features.
+Advanced AI orchestration, runtime tracing, multi-agent execution, broad collaboration, MCP write access, hosted marketplaces, executable plugins, enterprise deployment, billing, compliance, customization, and knowledge sharing should follow demonstrated demand and separate decisions. The bundled local catalog of data-only architecture templates is a narrow approved capability; user-authored rule packs await a supported declarative format. Intended/actual comparison, Git context, and basic architecture rules are part of the user-directed MVP, not deferred features.

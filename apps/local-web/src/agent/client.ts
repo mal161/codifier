@@ -1,6 +1,11 @@
 import {
+  architectureRuleEvaluationSchema,
+  architectureTemplateCatalogSchema,
   analysisJobSchema,
   graphSnapshotSchema,
+  installArchitectureTemplateRequestSchema,
+  type ArchitectureTemplate,
+  type ArchitectureRuleEvaluation,
   type AnalysisJob,
   type AnalysisJobResult,
 } from "@codifier/contracts";
@@ -76,6 +81,158 @@ export async function getGraph(
   if (response === null) {
     return null;
   }
+  const parsed = graphSnapshotSchema.safeParse(response);
+  if (!parsed.success) {
+    throw new Error("The agent returned an invalid graph snapshot.");
+  }
+  return parsed.data;
+}
+
+export async function listArchitectureTemplates(
+  baseUrl: string,
+  token: string,
+  repositoryId?: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ArchitectureTemplate[]> {
+  if (repositoryId && !isRepositoryId(repositoryId)) {
+    throw new Error("Enter a valid repository UUID.");
+  }
+  const query = repositoryId
+    ? `?repositoryId=${encodeURIComponent(repositoryId)}`
+    : "";
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/marketplace/templates${query}`,
+    {},
+    fetcher,
+  );
+  const parsed = architectureTemplateCatalogSchema.safeParse(response);
+  if (!parsed.success) {
+    throw new Error(
+      "The agent returned an invalid architecture template catalog.",
+    );
+  }
+  return parsed.data;
+}
+
+export async function installArchitectureTemplate(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  templateId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphSnapshot> {
+  if (!isRepositoryId(repositoryId)) {
+    throw new Error("Enter a valid repository UUID.");
+  }
+  const requestBody = installArchitectureTemplateRequestSchema.safeParse({
+    templateId,
+  });
+  if (!requestBody.success) {
+    throw new Error("The architecture template ID is invalid.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/marketplace/templates`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(requestBody.data),
+    },
+    fetcher,
+  );
+  const parsed = graphSnapshotSchema.safeParse(response);
+  if (!parsed.success) {
+    throw new Error("The agent returned an invalid graph snapshot.");
+  }
+  return parsed.data;
+}
+
+export async function getArchitectureRuleEvaluation(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ArchitectureRuleEvaluation> {
+  if (!isRepositoryId(repositoryId)) {
+    throw new Error("Enter a valid repository UUID.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/architecture-rules`,
+    {},
+    fetcher,
+  );
+  const parsed = architectureRuleEvaluationSchema.safeParse(response);
+  if (!parsed.success) {
+    throw new Error("The agent returned invalid architecture rule findings.");
+  }
+  return parsed.data;
+}
+
+export async function createIntendedComponent(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  name: string,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphSnapshot> {
+  if (!isRepositoryId(repositoryId)) {
+    throw new Error("Enter a valid repository UUID.");
+  }
+  const componentName = name.trim();
+  if (!componentName || componentName.length > 120) {
+    throw new Error("Component names must be between 1 and 120 characters.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/intended-components`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: componentName }),
+    },
+    fetcher,
+  );
+  const parsed = graphSnapshotSchema.safeParse(response);
+  if (!parsed.success) {
+    throw new Error("The agent returned an invalid graph snapshot.");
+  }
+  return parsed.data;
+}
+
+export async function mapEntityToIntendedComponent(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  componentId: string,
+  entityId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphSnapshot> {
+  if (
+    !isRepositoryId(repositoryId) ||
+    !isRepositoryId(componentId) ||
+    !isRepositoryId(entityId)
+  ) {
+    throw new Error(
+      "Repository, component, and entity IDs must be valid UUIDs.",
+    );
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/intended-components/${encodeURIComponent(componentId)}/mappings`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entityId }),
+    },
+    fetcher,
+  );
   const parsed = graphSnapshotSchema.safeParse(response);
   if (!parsed.success) {
     throw new Error("The agent returned an invalid graph snapshot.");
@@ -316,6 +473,10 @@ function agentErrorMessage(status: number, body: string): string {
             "This browser origin is not allowed by the local agent.",
           repository_not_found:
             "No saved graph exists for this repository UUID.",
+          architecture_template_identity_conflict:
+            "A graph item conflicts with this template's stable identity. Review the graph before installing it.",
+          architecture_template_not_found:
+            "That architecture template is not available in this local catalog.",
         };
         return messages[parsed.error] ?? `The local agent returned ${status}.`;
       }
