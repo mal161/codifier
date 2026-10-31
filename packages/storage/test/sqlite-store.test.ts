@@ -73,12 +73,22 @@ describe("SQLite graph store", () => {
   it("persists graph data after closing and reopening the database", () => {
     const databasePath = createTemporaryDatabasePath();
     const firstStore = openGraphStore(databasePath);
-    firstStore.replaceGraph(createSnapshot());
+    const original = createSnapshot();
+    const updated = createSnapshot("reopened");
+    firstStore.replaceGraph(original);
+    firstStore.replaceGraph(updated);
+    const revisionHistory = firstStore.listGraphRevisions(repositoryId);
     firstStore.close();
 
     const secondStore = openGraphStore(databasePath);
     stores.push(secondStore);
-    expect(secondStore.getGraph(repositoryId)).toEqual(createSnapshot());
+    expect(secondStore.getGraph(repositoryId)).toEqual(updated);
+    expect(secondStore.listGraphRevisions(repositoryId)).toEqual(
+      revisionHistory,
+    );
+    expect(
+      secondStore.getGraphRevision(repositoryId, revisionHistory[0]!.id),
+    ).toEqual(original);
   });
 
   it("persists Git context", () => {
@@ -163,12 +173,16 @@ describe("SQLite graph store", () => {
     stores.push(store);
     const original = createSnapshot();
     store.replaceGraph(original);
+    const historyBeforeFailure = store.listGraphRevisions(repositoryId);
 
     const invalid = createSnapshot("invalid");
     invalid.entities[0]!.evidenceIds = ["b04d9f9b-1e3d-4c44-82db-905f5f325737"];
 
     expect(() => store.replaceGraph(invalid)).toThrow(GraphValidationError);
     expect(store.getGraph(repositoryId)).toEqual(original);
+    expect(store.listGraphRevisions(repositoryId)).toEqual(
+      historyBeforeFailure,
+    );
   });
 
   it("replaces a repository graph transactionally", () => {
@@ -181,6 +195,61 @@ describe("SQLite graph store", () => {
 
     expect(store.getGraph(repositoryId)).toEqual(updated);
     expect(store.getGraph(repositoryId)?.entities).toHaveLength(1);
+  });
+
+  it("retains committed graph revisions and skips identical snapshots", () => {
+    const store = openGraphStore(createTemporaryDatabasePath());
+    stores.push(store);
+    const initial = createSnapshot();
+    const updated = createSnapshot("updated");
+
+    store.replaceGraph(initial);
+    const firstRevision = store.listGraphRevisions(repositoryId)[0]!;
+    store.replaceGraph(updated);
+    store.replaceGraph(updated);
+
+    const history = store.listGraphRevisions(repositoryId);
+    expect(history).toHaveLength(2);
+    expect(history[0]).toMatchObject({
+      id: firstRevision.id,
+      parentRevisionId: null,
+      sequence: 1,
+      sourceRevision: initial.revision,
+    });
+    expect(history[1]).toMatchObject({
+      parentRevisionId: firstRevision.id,
+      sequence: 2,
+      sourceRevision: updated.revision,
+      changeSummary: {
+        entities: { added: [], changed: [entityId], removed: [] },
+      },
+    });
+    expect(store.getGraphRevision(repositoryId, firstRevision.id)).toEqual(
+      initial,
+    );
+    expect(store.getGraph(repositoryId)).toEqual(updated);
+  });
+
+  it("commits a completed job outcome with its graph snapshot", () => {
+    const store = openGraphStore(createTemporaryDatabasePath());
+    stores.push(store);
+    const snapshot = createSnapshot();
+    const jobId = "3a4a9cc2-60eb-4aa7-8668-5f2c7736a834";
+    const completedJob = {
+      id: jobId,
+      repositoryId,
+      status: "completed",
+      jobJson: JSON.stringify({ id: jobId, status: "completed" }),
+      requestJson: JSON.stringify({ rootPath: "/repo" }),
+    };
+
+    store.replaceGraph(snapshot, completedJob);
+
+    expect(store.getGraph(repositoryId)).toEqual(snapshot);
+    expect(store.getAnalysisJob(jobId)).toMatchObject({
+      status: "completed",
+      jobJson: completedJob.jobJson,
+    });
   });
 
   it("reports stored graph rows that no longer satisfy domain invariants", () => {

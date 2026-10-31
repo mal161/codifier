@@ -80,7 +80,7 @@ For AI-derived claims, retain review outcomes. Rejected suggestions must not rea
 A source locator should contain:
 
 - Repository-relative path, normalized for the host platform.
-- Start and end line; columns when the parser can provide reliable values.
+- 1-based start/end lines and 0-based UTF-16 columns, with the end position exclusive. The TypeScript adapter derives these coordinates from parser offsets; editor URI adapters convert columns to the convention required by their target.
 - A source revision or content fingerprint sufficient to detect whether the location may have moved.
 - Optional symbol identity/fingerprint for navigation and reconciliation.
 - A freshness state, or enough information to calculate whether it is stale.
@@ -115,11 +115,11 @@ The accepted direction is incremental analysis plus versioned graph snapshots an
 - Snapshot comparison and restoration as a new event rather than erasure of history.
 - Identity continuity for unaffected entities.
 
-Exact event format, retention, migrations, and backup policy remain implementation decisions. The user-directed persistence targets are SQLite/Drizzle locally and PostgreSQL/Drizzle for cloud synchronization; this does not settle the schema or sync protocol.
+The local SQLite store records append-only validated graph snapshots with UUID revision IDs, a per-repository sequence, parent revision, Git/source revision, canonical hash, timestamp, ID-based change summary, and a current-revision pointer. Snapshot metadata and normalized current graph rows are committed in one transaction. Authenticated agent routes list revisions and retrieve an earlier snapshot. Retention, backup/export, restore interface, and job recovery remain open. Cloud PostgreSQL schema and sync protocol remain unimplemented and undecided.
 
 ## Storage technology direction and schema
 
-The user-directed MVP target is relational storage with SQLite/Drizzle for the local agent and PostgreSQL/Drizzle for cloud synchronization. Exact schema, migrations, query strategy, synchronization, retention, and recovery remain open. Do not introduce a graph database merely because the product is graph-shaped.
+The local store uses SQLite/Drizzle with normalized current-state tables and serialized historical snapshots, as recorded in [ADR 0009](decisions/0009-local-graph-revision-storage.md). Optional cloud PostgreSQL/Drizzle remains conditional and has no accepted sync schema. Do not introduce a graph database merely because the product is graph-shaped.
 
 ## Related implementation guides
 

@@ -4,6 +4,7 @@ import {
   analysisJobSchema,
   graphSnapshotSchema,
   installArchitectureTemplateRequestSchema,
+  sourceFreshnessResultSchema,
   type ArchitectureTemplate,
   type ArchitectureRuleEvaluation,
   type AnalysisJob,
@@ -32,6 +33,8 @@ export interface AnalysisDiagnostic {
 export interface AnalysisResult extends AnalysisJobResult {
   repositoryId: string;
 }
+
+export type SourceFreshness = ReturnType<typeof sourceFreshnessResultSchema.parse>;
 
 export function normalizeAgentUrl(value: string): string {
   let url: URL;
@@ -173,6 +176,35 @@ export async function getArchitectureRuleEvaluation(
   return parsed.data;
 }
 
+export async function checkSourceFreshness(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  rootPath: string,
+  entityId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<SourceFreshness> {
+  if (!isRepositoryId(repositoryId) || !isRepositoryId(entityId)) {
+    throw new Error("Repository and entity IDs must be valid UUIDs.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/source-freshness`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rootPath: rootPath.trim(), entityId }),
+    },
+    fetcher,
+  );
+  const parsed = sourceFreshnessResultSchema.safeParse(response);
+  if (!parsed.success) {
+    throw new Error("The agent returned invalid source freshness information.");
+  }
+  return parsed.data;
+}
+
 export async function createIntendedComponent(
   baseUrl: string,
   token: string,
@@ -240,6 +272,29 @@ export async function mapEntityToIntendedComponent(
   return parsed.data;
 }
 
+export async function removeEntityMapping(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  componentId: string,
+  entityId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphSnapshot> {
+  if (![repositoryId, componentId, entityId].every(isRepositoryId)) {
+    throw new Error("Repository, component, and entity IDs must be valid UUIDs.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/intended-components/${encodeURIComponent(componentId)}/mappings/${encodeURIComponent(entityId)}`,
+    { method: "DELETE" },
+    fetcher,
+  );
+  const parsed = graphSnapshotSchema.safeParse(response);
+  if (!parsed.success) throw new Error("The agent returned an invalid graph snapshot.");
+  return parsed.data;
+}
+
 export async function analyzeRepository(
   baseUrl: string,
   token: string,
@@ -284,6 +339,7 @@ export async function startAnalysisJob(
   rootPath: string,
   repositoryId?: string,
   fetcher: typeof fetch = fetch,
+  policy: { excludePatterns?: string[]; respectGitignore?: boolean } = {},
 ): Promise<AnalysisJob> {
   const path = rootPath.trim();
   if (!path) {
@@ -305,7 +361,10 @@ export async function startAnalysisJob(
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ rootPath: path }),
+      body: JSON.stringify({
+        rootPath: path,
+        ...policy,
+      }),
     },
     fetcher,
   );

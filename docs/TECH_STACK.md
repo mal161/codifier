@@ -2,13 +2,13 @@
 
 ## Status
 
-**User-directed architecture with proposed implementation details.** The required standalone local agent, shared local clients, offline analysis, and incremental cloud synchronization are recorded in [ADR 0006](decisions/0006-local-companion-agent.md). Exact package versions, native drivers, cloud vendor, identity provider, and some client/framework choices still require validation.
+**User-directed architecture with proposed implementation details.** The required standalone local agent, shared local clients, and offline analysis are recorded in [ADR 0006](decisions/0006-local-companion-agent.md). Cloud synchronization is optional and gated on data-scope and conflict decisions in [the remaining-feature phases](REMAINING_FEATURES_PHASES.md#phase-7--conditional-cloud-synchronization). Exact package versions, native drivers, cloud vendor, identity provider, and some client/framework choices still require validation.
 
 ## Executive recommendation
 
 Use a **TypeScript modular monorepo** with a standalone **local companion agent as a required MVP component**. The agent owns repository access, analysis, graph operations, local SQLite persistence, offline work, and synchronization. A VS Code extension, CLI, and local React web application are clients of the same agent; none embeds a second analyzer.
 
-The MVP has a local-first path and a minimal cloud path: the local agent works without connectivity, writes to SQLite, and queues graph synchronization; when connected, a Fastify cloud API persists shared graph data in PostgreSQL. Do not upload complete source repositories by default. Keep analyzer, graph domain, evidence, and source-location behavior independent of UI, storage vendor, cloud provider, and AI provider.
+The required MVP path is local-first: the agent works without connectivity and persists to SQLite. A minimal cloud path may be added after the sync data policy and conflict workflow are approved; only then would the local agent queue approved metadata for a Fastify API and PostgreSQL. Do not upload complete source repositories by default. Keep analyzer, graph domain, evidence, and source-location behavior independent of UI, storage vendor, cloud provider, and AI provider.
 
 The exact local-agent responsibilities and MVP sequencing below reflect the user's latest direction. Specific package versions, native drivers, cloud vendor, identity provider, and browser pairing protocol remain proposals requiring validation.
 
@@ -17,15 +17,15 @@ The exact local-agent responsibilities and MVP sequencing below reflect the user
 The attached stack proposal and follow-up requirements supersede the earlier recommendation to run analysis inside the VS Code extension and postpone cloud persistence:
 
 - The standalone local agent is fundamental to the MVP, not a later optional service.
-- The agent owns the local HTTP/WebSocket API, CLI, repository analysis, SQLite persistence, and offline sync outbox.
+- The agent owns the local HTTP/WebSocket API, CLI, repository analysis, and SQLite persistence. A cloud sync outbox is conditional on the explicit data and conflict decisions.
 - VS Code and the local React application communicate with the same agent.
-- Local SQLite and cloud PostgreSQL are both in the planned graph architecture; online synchronization must not be required for analysis.
+- Local SQLite is implemented. Cloud PostgreSQL remains a conditional direction; online synchronization must not be required for analysis.
 - pnpm workspaces and Turborepo form the monorepo foundation.
 - Drizzle ORM replaces the earlier Kysely recommendation for SQLite and PostgreSQL.
 - The MVP includes hierarchical React Flow visualization, bidirectional source traceability, intended/actual comparison, Git integration, and basic architecture rules.
 - AI orchestration, runtime instrumentation, multi-agent execution, enterprise governance, and plugin marketplace remain deferred.
 
-These are not a mandate to build every engine in the product catalog. See the [MVP execution order](IMPLEMENTATION_PLAN.md#revised-mvp-execution-order).
+These are not a mandate to build every engine in the product catalog. See the [MVP execution order](IMPLEMENTATION_PLAN.md#mvp-execution-order) and [remaining-feature phases](REMAINING_FEATURES_PHASES.md).
 
 ## Recommended stack by layer
 
@@ -47,19 +47,19 @@ These are not a mandate to build every engine in the product catalog. See the [M
 | Framework analysis              | React and Express conventions only where covered by golden fixtures                                                                                               | MVP                                  |
 | Additional language semantics   | Python, Django, and Flask after the TypeScript/JavaScript quality gate                                                                                            | Later                                |
 | Core/domain model               | TypeScript packages for graph contracts, evidence, locators, queries, and validation; no UI or provider dependencies                                              | MVP onward                           |
-| Local persistence               | SQLite + Drizzle ORM for graph, symbol index, job state, sync outbox, and local config                                                                            | MVP                                  |
-| Cloud persistence               | PostgreSQL + Drizzle ORM; relational graph tables and recursive CTEs; no graph database initially                                                                 | MVP synchronization backend          |
+| Local persistence               | SQLite + Drizzle ORM for current graph, revision history, job state, and local config                                                                             | Required MVP                         |
+| Cloud persistence               | PostgreSQL + Drizzle ORM; relational graph tables and recursive CTEs; no graph database initially                                                                 | Conditional on cloud-sync decisions  |
 | API contracts                   | Zod runtime validation and versioned REST/OpenAPI + WebSocket message contracts                                                                                   | MVP                                  |
 | Local file watch                | Chokidar behind a watcher interface; debounce/coalesce changes; never execute project hooks                                                                       | MVP                                  |
 | Logging                         | Pino structured logs with source/secret redaction                                                                                                                 | MVP                                  |
-| Local jobs/sync                 | SQLite-backed durable jobs/outbox and idempotent event delivery                                                                                                   | MVP                                  |
+| Local jobs/sync                 | SQLite-backed durable analysis jobs; add sync outbox and idempotent delivery only if cloud sync is approved                                                       | Durable jobs: MVP; outbox: conditional |
 | Cloud jobs                      | BullMQ + Redis only if measured workload justifies an asynchronous worker                                                                                         | Later                                |
 | AI integration                  | Provider-neutral adapter, bounded context retrieval, runtime validation, secure credentials, explicit opt-in; choose provider SDK only after data-policy decision | Optional later                       |
 | Agent integration               | Official TypeScript MCP SDK behind a read-only query interface                                                                                                    | After graph/API contracts stabilize  |
 | Tests                           | Vitest, golden repos, VS Code Extension Test Runner, Playwright for the local web UI                                                                              | From first code                      |
 | Quality/CI                      | ESLint, Prettier, TypeScript checks, GitHub Actions, Turbo pipelines, OS packaging matrix                                                                         | From scaffold                        |
 | Observability                   | OpenTelemetry-compatible instrumentation and structured, redacted logs; local diagnostics first; backend/exporter selected later                                  | Incrementally                        |
-| Cloud candidate                 | AWS ECS Fargate + RDS PostgreSQL; Cognito/OIDC, Secrets Manager, CloudWatch; all provider choices remain unapproved                                               | MVP synchronization/cloud evaluation |
+| Cloud candidate                 | AWS ECS Fargate + RDS PostgreSQL; Cognito/OIDC, Secrets Manager, CloudWatch; all provider choices remain unapproved                                               | Conditional evaluation only          |
 | Cloud assets                    | No object store initially; add S3 only for a defined export/artifact use case                                                                                     | Later                                |
 
 These choices reflect the user's latest stack requirements where stated; exact versions and native packages remain subject to cross-platform packaging spikes. The cloud vendor, identity service, and cloud observability provider remain proposals.
@@ -76,22 +76,16 @@ CLI ─────────────────┼── authenticated R
 Local React Web App ─┘                                      ├─ Repository inventory
                                                             ├─ Analysis engine
                                                             ├─ Canonical graph
-                                                            ├─ SQLite + Drizzle
-                                                            └─ Durable sync outbox
-                                                                  │ when online
-                                                                  ▼
-                                                         Cloud Fastify API
-                                                                  │
-                                                        PostgreSQL + Drizzle
+                                                            └─ SQLite + Drizzle
 ```
 
 The local agent is the single owner of repository access and analysis. CLI, extension, and local web clients share the same graph/query contracts. The agent binds only to `127.0.0.1` by default, authenticates every REST and WebSocket connection, validates Host/Origin, and rejects unauthenticated or cross-origin requests. A hosted web page must not be assumed able to access localhost safely; require explicit pairing and browser-origin/private-network safeguards before enabling that path.
 
-Analysis, graph navigation, and local persistence work offline. Synchronization sends approved graph metadata/events only, not complete source files by default. Use a durable local outbox and idempotent cloud ingestion; define conflicts and repository/workspace authorization before sync is enabled.
+Analysis, graph navigation, and local persistence work offline. Cloud synchronization is conditional. If enabled after policy decisions, it sends only approved graph metadata/events, uses a durable local outbox and idempotent ingestion, and requires defined conflicts and repository/workspace authorization.
 
-### Phase B: Minimal MVP cloud synchronization
+### Phase B: Conditional cloud synchronization
 
-The requested MVP priorities include local SQLite and cloud PostgreSQL. Begin with minimal sync and workspace identity, preserve offline use, and authorize each operation. Define which metadata leaves the device, conflict behavior, account ownership, retention, export, and deletion. Do not build broad collaboration workflows simply because a cloud database exists.
+Do not start cloud sync until the data scope and conflict decisions are recorded. If selected, add minimal PostgreSQL sync and workspace identity while preserving offline use and authorizing every operation. Define which metadata leaves the device, conflict behavior, account ownership, retention, export, and deletion. Do not build broad collaboration workflows simply because a cloud database exists.
 
 ### Phase C: Evidence-grounded AI (later/optional)
 

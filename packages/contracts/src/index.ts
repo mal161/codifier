@@ -142,6 +142,8 @@ export const analyzeRepositoryRequestSchema = z
   .object({
     rootPath: z.string().min(1).max(4_096),
     revision: z.string().min(1).nullable().optional(),
+    excludePatterns: z.array(z.string().min(1).max(256)).max(256).optional(),
+    respectGitignore: z.boolean().optional(),
   })
   .strict();
 
@@ -154,6 +156,20 @@ export const intendedComponentRequestSchema = z
 export const intendedComponentMappingRequestSchema = z
   .object({
     entityId: uuidSchema,
+  })
+  .strict();
+
+export const sourceFreshnessRequestSchema = z
+  .object({
+    rootPath: z.string().min(1).max(4_096),
+    entityId: uuidSchema,
+  })
+  .strict();
+
+export const sourceFreshnessResultSchema = z
+  .object({
+    status: z.enum(["current", "stale", "unresolved"]),
+    message: z.string().min(1),
   })
   .strict();
 
@@ -206,7 +222,7 @@ export const architectureRuleEvaluationSchema: z.ZodType<ArchitectureRuleEvaluat
     .object({
       repositoryId: uuidSchema,
       revision: z.string().min(1).nullable(),
-      ruleSetVersion: z.literal("1.0.0"),
+      ruleSetVersion: z.literal("1.1.0"),
       findings: z.array(architectureRuleFindingSchema),
     })
     .strict();
@@ -263,6 +279,19 @@ export const analysisChangeSummarySchema = z
   })
   .strict();
 
+export const analysisReconciliationSchema = z
+  .object({
+    mode: z.enum(["initial", "unchanged", "full-fallback"]),
+    addedFiles: z.array(repositoryRelativePathSchema),
+    changedFiles: z.array(repositoryRelativePathSchema),
+    removedFiles: z.array(repositoryRelativePathSchema),
+    renamedFiles: z.array(
+      z.object({ from: repositoryRelativePathSchema, to: repositoryRelativePathSchema }).strict(),
+    ),
+    reason: z.string().min(1),
+  })
+  .strict();
+
 export const analysisJobResultSchema = z
   .object({
     coverage: z
@@ -280,6 +309,7 @@ export const analysisJobResultSchema = z
     diagnostics: z.array(analysisDiagnosticSchema),
     diagnosticsTruncated: z.boolean(),
     persisted: z.boolean(),
+    reconciliation: analysisReconciliationSchema.optional(),
     changeSummary: analysisChangeSummarySchema.optional(),
   })
   .strict()

@@ -1,0 +1,10 @@
+**/node_modules/**
+**/test/**
+**/*.test.*
+.vscode/**
+.turbo/**
+.vscodeignore
+pnpm-lock.yaml
+tsconfig.json
+vitest.config.*
+*.vsix

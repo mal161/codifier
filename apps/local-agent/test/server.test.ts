@@ -18,16 +18,16 @@ const token = "this-is-a-test-token-with-at-least-32-bytes";
 const repositoryId = "7b9442d6-faaa-49f9-a39e-7de8a276a978";
 const evidenceId = "05a4d48e-1e17-4ca7-9e03-773ea13d3561";
 const entityId = "9ac38590-a7ac-4101-bfc9-dc323d1c9301";
+const interruptedJobId = "3a4a9cc2-60eb-4aa7-8668-5f2c7736a834";
 
 const servers: FastifyInstance[] = [];
 const stores: ReturnType<typeof openGraphStore>[] = [];
 const temporaryDirectories: string[] = [];
 
-async function startTestServer(): Promise<{
+async function startTestServer(store = openGraphStore(":memory:")): Promise<{
   app: FastifyInstance;
   baseUrl: string;
 }> {
-  const store = openGraphStore(":memory:");
   const app = createAgentServer({
     token,
     store,
@@ -113,6 +113,73 @@ describe("local agent API", () => {
 
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("serves committed graph revision history through authenticated routes", async () => {
+    const { baseUrl } = await startTestServer();
+    const store = stores.at(-1)!;
+    store.replaceGraph(createSnapshot());
+    store.replaceGraph(createSnapshot("updated"));
+
+    const historyResponse = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/revisions`,
+      { headers: headers() },
+    );
+    expect(historyResponse.status).toBe(200);
+    const history = (await historyResponse.json()) as {
+      revisions: Array<{
+        id: string;
+        sequence: number;
+        parentRevisionId: string | null;
+      }>;
+    };
+    expect(history.revisions).toHaveLength(2);
+    expect(history.revisions[1]).toMatchObject({
+      sequence: 2,
+      parentRevisionId: history.revisions[0]!.id,
+    });
+
+    const snapshotResponse = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/revisions/${history.revisions[0]!.id}`,
+      { headers: headers() },
+    );
+    expect(snapshotResponse.status).toBe(200);
+    expect(await snapshotResponse.json()).toEqual(createSnapshot());
+  });
+
+  it("restores interrupted jobs as retryable failures after agent restart", async () => {
+    const store = openGraphStore(":memory:");
+    store.saveAnalysisJob({
+      id: interruptedJobId,
+      repositoryId,
+      status: "running",
+      jobJson: JSON.stringify({
+        id: interruptedJobId,
+        repositoryId,
+        status: "running",
+        progress: {
+          phase: "reading",
+          currentFile: "src/index.ts",
+          completedFiles: 2,
+          totalFiles: 5,
+        },
+      }),
+      requestJson: JSON.stringify({ rootPath: "C:\\projects\\sample" }),
+    });
+    const { baseUrl } = await startTestServer(store);
+
+    const response = await fetch(
+      `${baseUrl}/v1/analysis-jobs/${interruptedJobId}`,
+      { headers: headers() },
+    );
+    expect(response.status).toBe(200);
+    const restored = analysisJobSchema.parse(await response.json());
+    expect(restored).toMatchObject({
+      status: "failed",
+      progress: { phase: "failed", completedFiles: 2 },
+      error: expect.stringContaining("agent restarted"),
+    });
+    expect(store.getAnalysisJob(interruptedJobId)?.status).toBe("failed");
   });
 
   it("rejects unexpected Host and Origin headers", async () => {
@@ -364,7 +431,7 @@ describe("local agent API", () => {
     expect(evaluation).toMatchObject({
       repositoryId,
       revision: graph.revision,
-      ruleSetVersion: "1.0.0",
+      ruleSetVersion: "1.1.0",
     });
     expect(evaluation.findings).toContainEqual(
       expect.objectContaining({
@@ -494,6 +561,26 @@ describe("local agent API", () => {
         (relationship: { type: string }) => relationship.type === "MAPS_TO",
       ),
     ).toHaveLength(1);
+
+    const removeMapping = await fetch(`${mappingsUrl}/${entityId}`, {
+      method: "DELETE",
+      headers: headers(),
+    });
+    expect(removeMapping.status).toBe(200);
+    const unmappedSnapshot = await removeMapping.json();
+    expect(
+      unmappedSnapshot.relationships.some(
+        (relationship: { type: string; targetEntityId: string }) =>
+          relationship.type === "MAPS_TO" &&
+          relationship.targetEntityId === entityId,
+      ),
+    ).toBe(false);
+    expect(
+      unmappedSnapshot.evidence.some(
+        (item: { description: string }) =>
+          item.description.includes("Developer mapped"),
+      ),
+    ).toBe(false);
   });
 
   it("analyzes a local fixture through the authenticated agent and stores its graph", async () => {
@@ -544,6 +631,14 @@ describe("local agent API", () => {
       (entity: { kind: string; name: string }) =>
         entity.kind === "symbol" && entity.name === "greet",
     ).id;
+    const freshnessUrl = `${baseUrl}/v1/repositories/${result.repositoryId}/source-freshness`;
+    const freshCheck = await fetch(freshnessUrl, {
+      method: "POST",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify({ rootPath: root, entityId: firstFunctionId }),
+    });
+    expect(freshCheck.status).toBe(200);
+    expect(await freshCheck.json()).toMatchObject({ status: "current" });
     const createIntent = await fetch(
       `${baseUrl}/v1/repositories/${result.repositoryId}/intended-components`,
       {
@@ -571,6 +666,12 @@ describe("local agent API", () => {
       join(root, "index.ts"),
       "export function greet(name: string) { return `Hi ${name}`; }\n",
     );
+    const staleCheck = await fetch(freshnessUrl, {
+      method: "POST",
+      headers: { ...headers(), "content-type": "application/json" },
+      body: JSON.stringify({ rootPath: root, entityId: firstFunctionId }),
+    });
+    expect(await staleCheck.json()).toMatchObject({ status: "stale" });
     const update = await fetch(
       `${baseUrl}/v1/repositories/${result.repositoryId}/analyze`,
       {

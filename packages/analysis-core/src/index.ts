@@ -60,6 +60,8 @@ export interface RepositoryAnalysisOptions {
   maxFiles?: number;
   maxFileBytes?: number;
   maxTotalBytes?: number;
+  excludePatterns?: string[];
+  respectGitignore?: boolean;
   previousSnapshot?: GraphSnapshot | null;
   signal?: AbortSignal;
   onProgress?: (progress: RepositoryAnalysisProgress) => void;
@@ -97,6 +99,21 @@ export interface RepositoryAnalysisReport {
   diagnostics: AnalysisDiagnostic[];
   diagnosticsTruncated: boolean;
   canPersist: boolean;
+  reconciliation: AnalysisReconciliation;
+}
+
+export interface AnalysisReconciliation {
+  mode: "initial" | "unchanged" | "full-fallback";
+  addedFiles: string[];
+  changedFiles: string[];
+  removedFiles: string[];
+  renamedFiles: Array<{ from: string; to: string }>;
+  reason: string;
+}
+
+export interface SourceFreshnessResult {
+  status: "current" | "stale" | "unresolved";
+  message: string;
 }
 
 export class RepositoryAnalysisError extends Error {
@@ -121,6 +138,70 @@ export class RepositoryAnalysisCancelledError extends Error {
   }
 }
 
+export async function validateSourceFreshness(
+  repositoryRoot: string,
+  snapshot: GraphSnapshot,
+  entityId: string,
+): Promise<SourceFreshnessResult> {
+  const entity = snapshot.entities.find(
+    (candidate) => candidate.id === entityId && candidate.state === "actual",
+  );
+  if (!entity?.source || entity.source.repositoryId !== snapshot.repositoryId) {
+    return { status: "unresolved", message: "This graph item has no verifiable source location." };
+  }
+  let root: string;
+  try {
+    root = await resolveRepositoryRoot(repositoryRoot);
+  } catch {
+    return { status: "unresolved", message: "The selected repository folder is unavailable." };
+  }
+  const relativePath = entity.source.repositoryRelativePath;
+  const fileEntity = snapshot.entities.find(
+    (candidate) =>
+      candidate.kind === "file" &&
+      candidate.source?.repositoryRelativePath === relativePath,
+  );
+  const expectedHash = fileEntity?.evidenceIds
+    .map((id) => snapshot.evidence.find((item) => item.id === id)?.description ?? "")
+    .map((description) => /sha256:([0-9a-f]{64})/.exec(description)?.[1])
+    .find((hash) => hash !== undefined);
+  if (!expectedHash) {
+    return { status: "unresolved", message: "The graph has no source fingerprint for this file." };
+  }
+  const absolutePath = resolve(root, ...relativePath.split("/"));
+  if (!isWithinRoot(root, absolutePath)) {
+    return { status: "unresolved", message: "The recorded path escapes the selected repository." };
+  }
+  try {
+    const metadata = await lstat(absolutePath);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      return { status: "unresolved", message: "The recorded source is not a regular file." };
+    }
+    const actualPath = await realpath(absolutePath);
+    if (!isWithinRoot(root, actualPath)) {
+      return { status: "unresolved", message: "The recorded source resolves outside the selected repository." };
+    }
+    const { contents } = await readBoundedFile(
+      absolutePath,
+      defaultMaxFileBytes,
+      undefined,
+    );
+    if (sha256(contents) !== expectedHash) {
+      return { status: "stale", message: "The file changed after this location was analyzed. Re-analyze before opening it." };
+    }
+    return { status: "current", message: "The file matches the analyzed source revision." };
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? error.code
+        : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return { status: "stale", message: "The recorded source file is missing. Re-analyze before opening it." };
+    }
+    return { status: "unresolved", message: "The source file could not be safely verified." };
+  }
+}
+
 interface InventoryFile {
   absolutePath: string;
   relativePath: string;
@@ -134,6 +215,19 @@ interface FileCandidate {
   absolutePath: string;
   relativePath: string;
   byteLength: number;
+}
+
+interface GitignoreRule {
+  basePath: string;
+  pattern: string;
+  negated: boolean;
+  directoryOnly: boolean;
+  anchored: boolean;
+}
+
+interface GitignoreReadBudget {
+  fileCount: number;
+  totalBytes: number;
 }
 
 interface Declaration {
@@ -192,6 +286,26 @@ export async function analyzeRepository(
         "Revision must be non-empty or null.",
       );
     }
+  }
+  if (
+    options.excludePatterns !== undefined &&
+    (!Array.isArray(options.excludePatterns) ||
+      options.excludePatterns.length > 256 ||
+      options.excludePatterns.some(
+        (pattern) =>
+          typeof pattern !== "string" ||
+          pattern.length === 0 ||
+          pattern.length > 256 ||
+          pattern.split("/").some((segment) => segment === "..") ||
+          pattern.startsWith("!") ||
+          pattern.startsWith("/") ||
+          pattern.includes("\\"),
+      ))
+  ) {
+    throw new RepositoryAnalysisError(
+      "invalid_analysis_options",
+      "Exclusion patterns must be additive repository-relative globs with no negation or traversal segments, at most 256 characters each and 256 patterns total.",
+    );
   }
 
   const limits = {
@@ -277,6 +391,11 @@ export async function analyzeRepository(
     limits.maxFiles,
     options.signal,
     reportProgress,
+    options.excludePatterns ?? [],
+    options.respectGitignore ?? true,
+  );
+  const inventoriedPaths = new Set(
+    candidates.map((candidate) => candidate.relativePath),
   );
   const projectConfigs = new Map<string, AnalyzerProjectConfig>([
     [repositoryRoot, projectConfig],
@@ -733,6 +852,26 @@ export async function analyzeRepository(
         workspacePackages,
       );
       if (!targetPath) {
+        const unsupportedTargetPath = getUnsupportedLocalImportTarget(
+          file,
+          moduleSpecifier,
+          repositoryRoot,
+          inventoriedPaths,
+        );
+        if (unsupportedTargetPath) {
+          reportDiagnostic({
+            code: "unsupported_local_import",
+            severity: "warning",
+            message: `Local import "${moduleSpecifier}" targets inventoried file "${unsupportedTargetPath}", whose file type is not analyzed.`,
+            path: file.relativePath,
+            range: sourceRange(
+              file.sourceFile,
+              statement.getStart(file.sourceFile),
+              statement.getEnd(),
+            ),
+          });
+          continue;
+        }
         if (
           !isRelativeSpecifier(moduleSpecifier) &&
           !matchesTsPathAlias(
@@ -839,16 +978,116 @@ export async function analyzeRepository(
     );
   }
 
+  const reconciliation = reconcileFileChanges(
+    files,
+    options.previousSnapshot,
+    inventoriedPaths,
+    diagnostics
+      .filter((diagnostic) =>
+        diagnostic.code === "gitignored" || diagnostic.code === "user_excluded",
+      )
+      .flatMap((diagnostic) => diagnostic.path ? [diagnostic.path] : []),
+  );
+
   return {
     snapshot: preservedSnapshot,
     coverage,
     diagnostics,
     diagnosticsTruncated,
+    reconciliation,
     canPersist:
       coverage.analyzedFiles > 0 &&
       coverage.failedFiles === 0 &&
       coverage.skippedFiles === 0 &&
       !coverage.truncated,
+  };
+}
+
+function reconcileFileChanges(
+  files: InventoryFile[],
+  previousSnapshot: GraphSnapshot | null | undefined,
+  inventoriedPaths: Set<string>,
+  excludedPaths: string[],
+): AnalysisReconciliation {
+  if (!previousSnapshot) {
+    return {
+      mode: "initial",
+      addedFiles: files.map((file) => file.relativePath).sort(),
+      changedFiles: [],
+      removedFiles: [],
+      renamedFiles: [],
+      reason: "No prior graph snapshot was supplied.",
+    };
+  }
+  const currentByPath = new Map(files.map((file) => [file.relativePath, file]));
+  const previousFiles = previousSnapshot.entities.filter(
+    (entity) => entity.kind === "file" && entity.source,
+  );
+  const previousByPath = new Map(
+    previousFiles.map((entity) => [entity.source!.repositoryRelativePath, entity]),
+  );
+  const evidenceById = new Map(previousSnapshot.evidence.map((item) => [item.id, item]));
+  const previousHashes = new Map<string, string>();
+  for (const [path, entity] of previousByPath) {
+    const hash = entity.evidenceIds
+      .map((id) => evidenceById.get(id)?.description ?? "")
+      .map((description) => /sha256:([0-9a-f]{64})/.exec(description)?.[1])
+      .find((value) => value !== undefined);
+    if (hash) previousHashes.set(path, hash);
+  }
+  const added = files.filter((file) => !previousByPath.has(file.relativePath));
+  const changedFiles = files
+    .filter((file) => {
+      const oldHash = previousHashes.get(file.relativePath);
+      return oldHash !== undefined && oldHash !== file.contentHash;
+    })
+    .map((file) => file.relativePath);
+  const removed = previousFiles
+    .map((entity) => entity.source!.repositoryRelativePath)
+    .filter(
+      (path) =>
+        !currentByPath.has(path) &&
+        !inventoriedPaths.has(path) &&
+        !excludedPaths.some(
+          (excludedPath) =>
+            path === excludedPath || path.startsWith(`${excludedPath}/`),
+        ),
+    );
+  const removedByHash = new Map<string, string[]>();
+  for (const path of removed) {
+    const hash = previousHashes.get(path);
+    if (hash) removedByHash.set(hash, [...(removedByHash.get(hash) ?? []), path]);
+  }
+  const addedByHash = new Map<string, InventoryFile[]>();
+  for (const file of added) {
+    addedByHash.set(file.contentHash, [...(addedByHash.get(file.contentHash) ?? []), file]);
+  }
+  const renamedFiles: Array<{ from: string; to: string }> = [];
+  const renamedFrom = new Set<string>();
+  const renamedTo = new Set<string>();
+  for (const [hash, oldPaths] of removedByHash) {
+    const newFiles = addedByHash.get(hash) ?? [];
+    if (oldPaths.length === 1 && newFiles.length === 1) {
+      renamedFiles.push({ from: oldPaths[0]!, to: newFiles[0]!.relativePath });
+      renamedFrom.add(oldPaths[0]!);
+      renamedTo.add(newFiles[0]!.relativePath);
+    }
+  }
+  const addedFiles = added
+    .map((file) => file.relativePath)
+    .filter((path) => !renamedTo.has(path))
+    .sort();
+  const removedFiles = removed.filter((path) => !renamedFrom.has(path)).sort();
+  const changed = addedFiles.length + removedFiles.length + changedFiles.length + renamedFiles.length > 0;
+  return {
+    mode: changed ? "full-fallback" : "unchanged",
+    addedFiles,
+    changedFiles: changedFiles.sort(),
+    removedFiles,
+    renamedFiles: renamedFiles.sort((left, right) => left.from.localeCompare(right.from)),
+    reason: changed
+      ? "Changed files trigger full analysis so dependent import and export relationships are rebuilt safely."
+      : "Analyzed file paths and content match the previous graph.",
   };
 }
 
@@ -972,13 +1211,28 @@ async function inventoryRepository(
   maxFiles: number,
   signal: AbortSignal | undefined,
   reportProgress: (progress: RepositoryAnalysisProgress) => void,
+  excludePatterns: string[],
+  respectGitignore: boolean,
 ): Promise<FileCandidate[]> {
+  const gitignoreBudget: GitignoreReadBudget = { fileCount: 0, totalBytes: 0 };
   const files: FileCandidate[] = [];
-  const directories = [repositoryRoot];
+  const directories: Array<{ path: string; inheritedRules: GitignoreRule[] }> =
+    [{ path: repositoryRoot, inheritedRules: [] }];
   let entriesExamined = 0;
   while (directories.length > 0) {
     throwIfCancelled(signal);
-    const directoryPath = directories.pop()!;
+    const directoryEntry = directories.pop()!;
+    const directoryPath = directoryEntry.path;
+    const localRules = respectGitignore
+      ? await readGitignoreRules(
+          directoryPath,
+          relative(repositoryRoot, directoryPath).split(sep).join("/"),
+          reportDiagnostic,
+          gitignoreBudget,
+          signal,
+        )
+      : [];
+    const ignoreRules = [...directoryEntry.inheritedRules, ...localRules];
     let directory;
     try {
       directory = await opendir(directoryPath);
@@ -1017,6 +1271,34 @@ async function inventoryRepository(
           .split(sep)
           .join("/");
 
+        if (
+          matchesExclusion(relativePath, excludePatterns, entry.isDirectory())
+        ) {
+          coverage.skippedFiles += 1;
+          reportDiagnostic({
+            code: "user_excluded",
+            severity: "warning",
+            message: "Path excluded by user-configured analysis policy.",
+            path: relativePath,
+          });
+          continue;
+        }
+        const isDirectory = entry.isDirectory();
+        const ignoredByGit =
+          ignoreRules.length > 0 &&
+          isGitignored(relativePath, isDirectory, ignoreRules);
+        if (ignoredByGit) {
+          coverage.skippedFiles += entry.isFile() ? 1 : 0;
+          reportDiagnostic({
+            code: "gitignored",
+            severity: "warning",
+            message: "Path excluded by a .gitignore rule.",
+            path: relativePath,
+          });
+          if (isDirectory) coverage.excludedDirectories += 1;
+          else continue;
+        }
+
         if (entry.isSymbolicLink()) {
           if (!entry.isDirectory()) {
             coverage.filesDiscovered += 1;
@@ -1036,7 +1318,10 @@ async function inventoryRepository(
           if (excludedDirectoryNames.has(entry.name.toLowerCase())) {
             coverage.excludedDirectories += 1;
           } else {
-            directories.push(absolutePath);
+            directories.push({
+              path: absolutePath,
+              inheritedRules: ignoreRules,
+            });
           }
           continue;
         }
@@ -1115,6 +1400,206 @@ async function inventoryRepository(
     left.relativePath.localeCompare(right.relativePath),
   );
   return files;
+}
+
+async function readGitignoreRules(
+  directoryPath: string,
+  basePath: string,
+  reportDiagnostic: (diagnostic: AnalysisDiagnostic) => void,
+  budget: GitignoreReadBudget,
+  signal: AbortSignal | undefined,
+): Promise<GitignoreRule[]> {
+  const path = join(directoryPath, ".gitignore");
+  let metadata;
+  try {
+    metadata = await lstat(path);
+  } catch {
+    return [];
+  }
+  const remainingBytes = 4_194_304 - budget.totalBytes;
+  if (
+    !metadata.isFile() ||
+    metadata.size > 1_048_576 ||
+    budget.fileCount >= 128 ||
+    metadata.size > remainingBytes
+  ) {
+    reportDiagnostic({
+      code: "gitignore_unavailable",
+      severity: "warning",
+      message:
+        "The .gitignore file is not regular or exceeds the per-file, file-count, or cumulative policy limit; its rules were not applied.",
+      path: basePath ? `${basePath}/.gitignore` : ".gitignore",
+    });
+    return [];
+  }
+  let contents: string;
+  try {
+    const result = await readBoundedFile(
+      path,
+      Math.min(1_048_576, remainingBytes),
+      signal,
+    );
+    contents = result.contents;
+    budget.fileCount += 1;
+    budget.totalBytes += result.byteLength;
+  } catch (error) {
+    if (error instanceof RepositoryAnalysisCancelledError) throw error;
+    reportDiagnostic({
+      code: "gitignore_unavailable",
+      severity: "warning",
+      message:
+        "The .gitignore file could not be read; its rules were not applied.",
+      path: basePath ? `${basePath}/.gitignore` : ".gitignore",
+    });
+    return [];
+  }
+
+  const rules: GitignoreRule[] = [];
+  for (const [lineIndex, originalLine] of contents
+    .split(/\r?\n/)
+    .entries()) {
+    const line = stripUnescapedTrailingSpaces(originalLine);
+    if (!line || line.startsWith("#")) continue;
+    let pattern = line;
+    let negated = false;
+    if (pattern.startsWith("!")) {
+      negated = true;
+      pattern = pattern.slice(1);
+    } else if (pattern.startsWith("\\!") || pattern.startsWith("\\#")) {
+      pattern = pattern.slice(1);
+    }
+    if (/[\\[\]]/.test(pattern)) {
+      reportDiagnostic({
+        code: "gitignore_pattern_unsupported",
+        severity: "warning",
+        message:
+          "This .gitignore pattern uses escaped or character-class syntax that Codifier does not support; the rule was skipped.",
+        path: basePath ? `${basePath}/.gitignore` : ".gitignore",
+        range: {
+          start: { line: lineIndex + 1, column: 0 },
+          end: { line: lineIndex + 1, column: originalLine.length },
+        },
+      });
+      continue;
+    }
+    const directoryOnly = pattern.endsWith("/") && !pattern.endsWith("\\/");
+    if (directoryOnly) pattern = pattern.slice(0, -1);
+    const anchored = pattern.startsWith("/");
+    if (anchored) pattern = pattern.slice(1);
+    if (!pattern) continue;
+    rules.push({ basePath, pattern, negated, directoryOnly, anchored });
+  }
+  return rules;
+}
+
+function stripUnescapedTrailingSpaces(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === " ") {
+    let backslashes = 0;
+    for (let index = end - 2; index >= 0 && value[index] === "\\"; index -= 1) {
+      backslashes += 1;
+    }
+    if (backslashes % 2 === 1) break;
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+function matchesExclusion(
+  path: string,
+  patterns: string[],
+  isDirectory: boolean,
+): boolean {
+  return patterns.some((pattern) => {
+    if (pattern.endsWith("/**")) {
+      const directory = pattern.slice(0, -3).replace(/\/$/, "");
+      return path === directory || path.startsWith(`${directory}/`);
+    }
+    if (pattern.endsWith("/")) {
+      const directory = pattern.slice(0, -1);
+      return (
+        (isDirectory && path === directory) ||
+        path.startsWith(`${directory}/`)
+      );
+    }
+    if (globMatches(path, pattern)) return true;
+    if (!pattern.includes("/")) {
+      return path.split("/").some((segment) => globMatches(segment, pattern));
+    }
+    return false;
+  });
+}
+
+function isGitignored(
+  path: string,
+  isDirectory: boolean,
+  rules: GitignoreRule[],
+): boolean {
+  const parts = path.split("/");
+  const directoryPrefixes = parts
+    .slice(0, -1)
+    .map((_, index) => parts.slice(0, index + 1).join("/"));
+  for (const prefix of directoryPrefixes) {
+    if (evaluateIgnoreRules(prefix, true, rules)) return true;
+  }
+  return evaluateIgnoreRules(path, isDirectory, rules);
+}
+
+function evaluateIgnoreRules(
+  path: string,
+  isDirectory: boolean,
+  rules: GitignoreRule[],
+): boolean {
+  let ignored = false;
+  for (const rule of rules) {
+    const scopedPath = rule.basePath
+      ? path.startsWith(`${rule.basePath}/`)
+        ? path.slice(rule.basePath.length + 1)
+        : null
+      : path;
+    if (!scopedPath) continue;
+    const parts = scopedPath.split("/");
+    const candidates = parts.map((_, index) =>
+      parts.slice(0, index + 1).join("/"),
+    );
+    const matched = candidates.some((candidate, index) => {
+      const candidateIsDirectory = index < candidates.length - 1 || isDirectory;
+      if (rule.directoryOnly && !candidateIsDirectory) return false;
+      if (!rule.anchored && !rule.pattern.includes("/")) {
+        return (
+          candidate.split("/").at(-1) !== undefined &&
+          globMatches(candidate.split("/").at(-1)!, rule.pattern)
+        );
+      }
+      return globMatches(candidate, rule.pattern);
+    });
+    if (matched) ignored = !rule.negated;
+  }
+  return ignored;
+}
+
+function globMatches(path: string, pattern: string): boolean {
+  const normalized = pattern.replace(/\\/g, "/").replace(/^\.\//, "");
+  let expression = "^";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const character = normalized[index]!;
+    if (character === "*") {
+      if (normalized[index + 1] === "*") {
+        index += 1;
+        if (normalized[index + 1] === "/") {
+          index += 1;
+          expression += "(?:.*/)?";
+        } else expression += ".*";
+      } else expression += "[^/]*";
+    } else if (character === "?") expression += "[^/]";
+    else expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+  }
+  expression += "$";
+  const hasSlash = normalized.includes("/");
+  const matcher = new RegExp(
+    hasSlash ? expression : `(?:^|/)${expression.slice(1)}`,
+  );
+  return matcher.test(path);
 }
 
 function isWithinRoot(repositoryRoot: string, candidatePath: string): boolean {
@@ -1592,6 +2077,31 @@ function resolveProjectImport(
     compilerOptions,
     availableFiles,
   );
+}
+
+function getUnsupportedLocalImportTarget(
+  importer: InventoryFile,
+  moduleSpecifier: string,
+  repositoryRoot: string,
+  inventoriedPaths: Set<string>,
+): string | null {
+  if (!isRelativeSpecifier(moduleSpecifier)) {
+    return null;
+  }
+  const absoluteTarget = resolve(
+    dirname(importer.absolutePath),
+    moduleSpecifier,
+  );
+  if (
+    !isWithinRoot(repositoryRoot, absoluteTarget) ||
+    supportedExtensions.has(extname(absoluteTarget).toLowerCase())
+  ) {
+    return null;
+  }
+  const relativeTarget = relative(repositoryRoot, absoluteTarget)
+    .split(sep)
+    .join("/");
+  return inventoriedPaths.has(relativeTarget) ? relativeTarget : null;
 }
 
 function resolveWithTypeScript(

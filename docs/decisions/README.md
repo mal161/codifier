@@ -27,12 +27,20 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0008: Evidence-backed architecture rules](0008-evidence-backed-architecture-rules.md) records the current built-in graph checks and their review-only semantics.
 
+[0009: Local graph revision storage](0009-local-graph-revision-storage.md) records the SQLite snapshot-history implementation and its current limits.
+
+[0010: Durable analysis-job state](0010-durable-analysis-job-state.md) records how queued/running work is surfaced after an agent restart.
+
+[0011: Source freshness and intent drift](0011-source-freshness-and-intent-drift.md) records point-in-time source validation, mapped dependency comparisons, and reversible mapping removal.
+
+[0012: Initial VS Code extension client](0012-vscode-extension-client.md) records the agent-only extension boundary, loopback authentication, SecretStorage, and source navigation flow.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?
 2. Which TypeScript/JavaScript constructs and React/Express conventions are supported initially?
 3. What repository inventory rules apply to ignore files, generated/vendor content, symlinks, and oversized files?
-4. Which SQLite driver and migration/recovery strategy pass cross-platform validation?
+4. What snapshot retention, backup/export, and full recovery policy is appropriate beyond the initial SQLite revision/job history?
 5. What sync event schema, workspace identity, conflict, retention, export, and deletion rules apply?
 6. What token lifecycle and browser pairing/Host/Origin rules protect local REST/WebSockets?
 7. Is an AI provider part of the first release? If so, what data may be sent and under what opt-in?

@@ -16,18 +16,20 @@ import {
   installArchitectureTemplateRequestSchema,
   intendedComponentMappingRequestSchema,
   intendedComponentRequestSchema,
+  sourceFreshnessRequestSchema,
 } from "@codifier/contracts";
 import {
   analyzeRepository,
   preserveIntendedGraphItems,
   RepositoryAnalysisCancelledError,
   RepositoryAnalysisError,
+  validateSourceFreshness,
 } from "@codifier/analysis-core";
 import { EventEmitter } from "node:events";
 import { timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import type { GraphStore } from "@codifier/storage";
+import type { GraphStore, PersistedAnalysisJob } from "@codifier/storage";
 import { readGitContext } from "./git-context.js";
 import {
   findArchitectureTemplate,
@@ -60,6 +62,14 @@ interface AnalysisJobParams {
 interface AnalysisJobRecord {
   value: AnalysisJob;
   controller: AbortController;
+  request: {
+    rootPath: string;
+    revision: string | null;
+    excludePatterns?: string[];
+    respectGitignore?: boolean;
+  };
+  lastPersistedAt: number;
+  lastPersistedPhase: AnalysisJob["progress"]["phase"];
 }
 
 const maxActiveAnalysisJobs = 2;
@@ -94,6 +104,56 @@ export function createAgentServer(
       },
     },
   });
+
+  for (const stored of options.store
+    .listAnalysisJobs(maxRetainedAnalysisJobs)
+    .reverse()) {
+    try {
+      const value = analysisJobSchema.parse(JSON.parse(stored.jobJson));
+      const parsedRequest = analyzeRepositoryRequestSchema.safeParse(
+        JSON.parse(stored.requestJson),
+      );
+      if (!parsedRequest.success) {
+        options.store.deleteAnalysisJob(stored.id);
+        continue;
+      }
+      const record: AnalysisJobRecord = {
+        value,
+        controller: new AbortController(),
+        request: {
+          rootPath: parsedRequest.data.rootPath,
+          revision: parsedRequest.data.revision ?? null,
+          ...(parsedRequest.data.excludePatterns
+            ? { excludePatterns: parsedRequest.data.excludePatterns }
+            : {}),
+          ...(parsedRequest.data.respectGitignore !== undefined
+            ? { respectGitignore: parsedRequest.data.respectGitignore }
+            : {}),
+        },
+        lastPersistedAt: stored.updatedAt,
+        lastPersistedPhase: value.progress.phase,
+      };
+      if (isActiveJob(value.status)) {
+        value.status = "failed";
+        value.progress = {
+          phase: "failed",
+          currentFile: null,
+          completedFiles: value.progress.completedFiles,
+          totalFiles: value.progress.totalFiles,
+        };
+        value.error =
+          "The local agent restarted before this analysis finished. Retry the analysis to resume from the last committed graph.";
+      }
+      analysisJobs.set(value.id, record);
+      persistAnalysisJob(options.store, record);
+    } catch (error) {
+      app.log.warn(
+        { err: error, analysisJobId: stored.id },
+        "A persisted analysis job could not be restored.",
+      );
+      options.store.deleteAnalysisJob(stored.id);
+    }
+  }
 
   app.register(websocket, { options: { maxPayload: 65_536 } });
 
@@ -179,6 +239,29 @@ export function createAgentServer(
         return reply.code(404).send({ error: "repository_not_found" });
       }
       return evaluateArchitectureRules(snapshot);
+    },
+  );
+
+  app.post<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/source-freshness",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      const parsed = sourceFreshnessRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_source_freshness_request" });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      return validateSourceFreshness(
+        parsed.data.rootPath,
+        snapshot,
+        parsed.data.entityId,
+      );
     },
   );
 
@@ -300,6 +383,36 @@ export function createAgentServer(
         return reply.code(404).send({ error: "repository_not_found" });
       }
 
+      return snapshot;
+    },
+  );
+
+  app.get<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/revisions",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      if (!options.store.getGraph(repositoryId)) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      return { revisions: options.store.listGraphRevisions(repositoryId) };
+    },
+  );
+
+  app.get<{ Params: RepositoryParams & { revisionId: string } }>(
+    "/v1/repositories/:repositoryId/revisions/:revisionId",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      const revisionId = parseRepositoryId(request.params.revisionId);
+      if (!repositoryId || !revisionId) {
+        return reply.code(400).send({ error: "invalid_revision_identifier" });
+      }
+      const snapshot = options.store.getGraphRevision(repositoryId, revisionId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "graph_revision_not_found" });
+      }
       return snapshot;
     },
   );
@@ -464,6 +577,43 @@ export function createAgentServer(
     },
   );
 
+  app.delete<{ Params: IntendedComponentParams & { entityId: string } }>(
+    "/v1/repositories/:repositoryId/intended-components/:componentId/mappings/:entityId",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      const componentId = parseRepositoryId(request.params.componentId);
+      const entityId = parseRepositoryId(request.params.entityId);
+      if (!repositoryId || !componentId || !entityId) {
+        return reply.code(400).send({ error: "invalid_mapping_identifier" });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) return reply.code(404).send({ error: "repository_not_found" });
+      const mapping = snapshot.relationships.find(
+        (relationship) =>
+          relationship.sourceEntityId === componentId &&
+          relationship.targetEntityId === entityId &&
+          relationship.type === "MAPS_TO" &&
+          relationship.state === "intended",
+      );
+      if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
+      const relationships = snapshot.relationships.filter(
+        (relationship) => relationship.id !== mapping.id,
+      );
+      const referencedEvidenceIds = new Set([
+        ...snapshot.entities.flatMap((entity) => entity.evidenceIds),
+        ...relationships.flatMap((relationship) => relationship.evidenceIds),
+      ]);
+      const updatedSnapshot: GraphSnapshot = {
+        ...snapshot,
+        relationships,
+        evidence: snapshot.evidence.filter((item) => referencedEvidenceIds.has(item.id)),
+      };
+      options.store.replaceGraph(updatedSnapshot);
+      events.emit("graph.updated", repositoryId, updatedSnapshot.revision);
+      return updatedSnapshot;
+    },
+  );
+
   app.post<{ Params: RepositoryParams }>(
     "/v1/repositories/:repositoryId/analyze",
     async (request, reply) => {
@@ -489,6 +639,8 @@ export function createAgentServer(
           repositoryId,
           repositoryRoot: parsed.data.rootPath,
           revision: parsed.data.revision ?? gitContext.commit,
+          excludePatterns: parsed.data.excludePatterns,
+          respectGitignore: parsed.data.respectGitignore,
           previousSnapshot: options.store.getGraph(repositoryId),
         });
         if (report.canPersist) {
@@ -506,6 +658,7 @@ export function createAgentServer(
           diagnostics: report.diagnostics,
           diagnosticsTruncated: report.diagnosticsTruncated,
           persisted: report.canPersist,
+          reconciliation: report.reconciliation,
         };
       } catch (error) {
         if (error instanceof RepositoryAnalysisError) {
@@ -537,6 +690,8 @@ export function createAgentServer(
         repositoryId,
         repositoryRoot: parsed.data.rootPath,
         revision: parsed.data.revision ?? gitContext.commit,
+        excludePatterns: parsed.data.excludePatterns,
+        respectGitignore: parsed.data.respectGitignore,
         previousSnapshot: options.store.getGraph(repositoryId),
       });
       if (report.canPersist) {
@@ -554,6 +709,7 @@ export function createAgentServer(
         diagnostics: report.diagnostics,
         diagnosticsTruncated: report.diagnosticsTruncated,
         persisted: report.canPersist,
+        reconciliation: report.reconciliation,
       };
     } catch (error) {
       if (error instanceof RepositoryAnalysisError) {
@@ -638,6 +794,7 @@ export function createAgentServer(
       if (isActiveJob(record.value.status)) {
         record.value.status = "cancelling";
         record.controller.abort();
+        persistAnalysisJob(options.store, record);
       }
       reply.header("cache-control", "no-store");
       return record.value;
@@ -671,6 +828,8 @@ export function createAgentServer(
     repositoryId: string,
     repositoryRoot: string,
     revision: string | null,
+    excludePatterns?: string[],
+    respectGitignore?: boolean,
   ): { value: AnalysisJob } | { error: string; statusCode: number } {
     if (
       [...analysisJobs.values()].some(
@@ -686,7 +845,7 @@ export function createAgentServer(
     if (activeCount >= maxActiveAnalysisJobs) {
       return { error: "analysis_capacity_reached", statusCode: 503 };
     }
-    pruneAnalysisJobs(analysisJobs);
+    pruneAnalysisJobs(analysisJobs, options.store);
     if (analysisJobs.size >= maxRetainedAnalysisJobs) {
       return { error: "analysis_job_capacity_reached", statusCode: 503 };
     }
@@ -703,8 +862,20 @@ export function createAgentServer(
         totalFiles: null,
       },
     });
-    const record = { value, controller };
+    const record: AnalysisJobRecord = {
+      value,
+      controller,
+      request: {
+        rootPath: repositoryRoot,
+        revision,
+        ...(excludePatterns ? { excludePatterns } : {}),
+        ...(respectGitignore !== undefined ? { respectGitignore } : {}),
+      },
+      lastPersistedAt: 0,
+      lastPersistedPhase: "inventory",
+    };
     analysisJobs.set(value.id, record);
+    persistAnalysisJob(options.store, record);
     const task = new Promise<void>((resolveTask) => {
       setImmediate(resolveTask);
     }).then(() =>
@@ -712,6 +883,8 @@ export function createAgentServer(
         record,
         repositoryRoot,
         revision,
+        excludePatterns,
+        respectGitignore,
         options.store,
         events,
         app.log,
@@ -736,15 +909,19 @@ async function executeAnalysisJob(
   record: AnalysisJobRecord,
   repositoryRoot: string,
   revision: string | null,
+  excludePatterns: string[] | undefined,
+  respectGitignore: boolean | undefined,
   store: GraphStore,
   events: EventEmitter,
   logger: FastifyInstance["log"],
 ): Promise<void> {
   if (record.controller.signal.aborted) {
     markJobCancelled(record.value);
+    persistAnalysisJob(store, record);
     return;
   }
   record.value.status = "running";
+  persistAnalysisJob(store, record);
   try {
     const previousSnapshot = store.getGraph(record.value.repositoryId);
     const gitContext = await readGitContext(repositoryRoot);
@@ -752,6 +929,8 @@ async function executeAnalysisJob(
       repositoryId: record.value.repositoryId,
       repositoryRoot,
       revision: revision ?? gitContext.commit,
+      excludePatterns,
+      respectGitignore,
       previousSnapshot,
       signal: record.controller.signal,
       onProgress: (progress) => {
@@ -759,10 +938,17 @@ async function executeAnalysisJob(
           record.value.status = "running";
         }
         record.value.progress = progress;
+        if (
+          record.lastPersistedPhase !== progress.phase ||
+          Date.now() - record.lastPersistedAt >= 250
+        ) {
+          persistAnalysisJob(store, record);
+        }
       },
     });
     if (record.controller.signal.aborted) {
       markJobCancelled(record.value);
+      persistAnalysisJob(store, record);
       return;
     }
 
@@ -776,8 +962,10 @@ async function executeAnalysisJob(
         completedFiles: report.coverage.analyzedFiles,
         totalFiles: report.coverage.analyzedFiles,
       };
+      persistAnalysisJob(store, record);
       if (record.controller.signal.aborted) {
         markJobCancelled(record.value);
+        persistAnalysisJob(store, record);
         return;
       }
       changeSummaryBase = store.getGraph(record.value.repositoryId);
@@ -785,7 +973,6 @@ async function executeAnalysisJob(
         { ...report.snapshot, gitContext },
         changeSummaryBase,
       );
-      store.replaceGraph(persistedSnapshot);
       persisted = true;
     }
     const result: AnalysisJobResult = {
@@ -793,6 +980,7 @@ async function executeAnalysisJob(
       diagnostics: report.diagnostics,
       diagnosticsTruncated: report.diagnosticsTruncated,
       persisted,
+      reconciliation: report.reconciliation,
       ...(persisted
         ? {
             changeSummary: summarizeGraphChanges(
@@ -810,6 +998,12 @@ async function executeAnalysisJob(
       completedFiles: report.coverage.analyzedFiles,
       totalFiles: report.coverage.analyzedFiles,
     };
+    if (persisted) {
+      store.replaceGraph(persistedSnapshot, persistedAnalysisJob(record));
+      markAnalysisJobPersisted(record);
+    } else {
+      persistAnalysisJob(store, record);
+    }
     if (persisted) {
       try {
         events.emit(
@@ -830,6 +1024,7 @@ async function executeAnalysisJob(
       record.controller.signal.aborted
     ) {
       markJobCancelled(record.value);
+      persistAnalysisJob(store, record);
       return;
     }
     logger.error(
@@ -847,6 +1042,7 @@ async function executeAnalysisJob(
       error instanceof RepositoryAnalysisError
         ? error.message
         : "Analysis failed unexpectedly. Check the local agent logs.";
+    persistAnalysisJob(store, record);
   }
 }
 
@@ -901,13 +1097,51 @@ function markJobCancelled(job: AnalysisJob): void {
   };
 }
 
-function pruneAnalysisJobs(jobs: Map<string, AnalysisJobRecord>): void {
+function persistAnalysisJob(
+  store: GraphStore,
+  record: AnalysisJobRecord,
+): void {
+  store.saveAnalysisJob(persistedAnalysisJob(record));
+  markAnalysisJobPersisted(record);
+}
+
+function persistedAnalysisJob(
+  record: AnalysisJobRecord,
+): Omit<PersistedAnalysisJob, "updatedAt"> {
+  return {
+    id: record.value.id,
+    repositoryId: record.value.repositoryId,
+    status: record.value.status,
+    jobJson: JSON.stringify(record.value),
+    requestJson: JSON.stringify({
+      rootPath: record.request.rootPath,
+      revision: record.request.revision,
+      ...(record.request.excludePatterns
+        ? { excludePatterns: record.request.excludePatterns }
+        : {}),
+      ...(record.request.respectGitignore !== undefined
+        ? { respectGitignore: record.request.respectGitignore }
+        : {}),
+    }),
+  };
+}
+
+function markAnalysisJobPersisted(record: AnalysisJobRecord): void {
+  record.lastPersistedAt = Date.now();
+  record.lastPersistedPhase = record.value.progress.phase;
+}
+
+function pruneAnalysisJobs(
+  jobs: Map<string, AnalysisJobRecord>,
+  store: GraphStore,
+): void {
   for (const [id, record] of jobs) {
     if (jobs.size < maxRetainedAnalysisJobs) {
       break;
     }
     if (!isActiveJob(record.value.status)) {
       jobs.delete(id);
+      store.deleteAnalysisJob(id);
     }
   }
 }

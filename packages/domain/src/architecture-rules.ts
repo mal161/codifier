@@ -1,4 +1,4 @@
-import type { GraphSnapshot } from "./index.js";
+import type { GraphRelationship, GraphSnapshot } from "./index.js";
 
 export interface ArchitectureRuleFinding {
   ruleId: string;
@@ -13,7 +13,7 @@ export interface ArchitectureRuleFinding {
 export interface ArchitectureRuleEvaluation {
   repositoryId: string;
   revision: string | null;
-  ruleSetVersion: "1.0.0";
+  ruleSetVersion: "1.1.0";
   findings: ArchitectureRuleFinding[];
 }
 
@@ -102,6 +102,9 @@ export function evaluateArchitectureRules(
     });
   }
 
+  findings.push(
+    ...findIntentDependencyDrift(snapshot, intendedComponents, mappings),
+  );
   findings.push(...findDependencyCycles(snapshot, componentsByMappedEntity));
 
   findings.sort(
@@ -113,9 +116,127 @@ export function evaluateArchitectureRules(
   return {
     repositoryId: snapshot.repositoryId,
     revision: snapshot.revision,
-    ruleSetVersion: "1.0.0",
+    ruleSetVersion: "1.1.0",
     findings,
   };
+}
+
+function findIntentDependencyDrift(
+  snapshot: GraphSnapshot,
+  intendedComponents: GraphSnapshot["entities"],
+  mappings: GraphRelationship[],
+): ArchitectureRuleFinding[] {
+  const components = intendedComponents.filter(
+    (entity) => entity.kind === "component" && entity.state === "intended",
+  );
+  const componentIds = new Set(components.map((component) => component.id));
+  const actualToComponents = new Map<string, Set<string>>();
+  const componentToActual = new Map<string, Set<string>>();
+  for (const mapping of mappings) {
+    const mapped = actualToComponents.get(mapping.targetEntityId) ?? new Set();
+    mapped.add(mapping.sourceEntityId);
+    actualToComponents.set(mapping.targetEntityId, mapped);
+    const actual = componentToActual.get(mapping.sourceEntityId) ?? new Set();
+    actual.add(mapping.targetEntityId);
+    componentToActual.set(mapping.sourceEntityId, actual);
+  }
+
+  const keyFor = (sourceId: string, targetId: string): string =>
+    `${sourceId}:${targetId}`;
+  const expected = new Map<string, GraphRelationship[]>();
+  for (const relationship of snapshot.relationships) {
+    if (
+      relationship.state !== "intended" ||
+      relationship.type !== "DEPENDS_ON" ||
+      !componentIds.has(relationship.sourceEntityId) ||
+      !componentIds.has(relationship.targetEntityId)
+    ) continue;
+    const key = keyFor(relationship.sourceEntityId, relationship.targetEntityId);
+    expected.set(key, [...(expected.get(key) ?? []), relationship]);
+  }
+
+  const observed = new Map<string, GraphRelationship[]>();
+  const dependencyTypes = new Set(["IMPORTS", "REEXPORTS", "DEPENDS_ON"]);
+  for (const relationship of snapshot.relationships) {
+    if (relationship.state !== "actual" || !dependencyTypes.has(relationship.type)) continue;
+    const sourceComponents = actualToComponents.get(relationship.sourceEntityId);
+    const targetComponents = actualToComponents.get(relationship.targetEntityId);
+    if (!sourceComponents || !targetComponents) continue;
+    for (const sourceId of sourceComponents) {
+      for (const targetId of targetComponents) {
+        if (sourceId === targetId) continue;
+        const key = keyFor(sourceId, targetId);
+        observed.set(key, [...(observed.get(key) ?? []), relationship]);
+      }
+    }
+  }
+
+  const componentById = new Map(components.map((component) => [component.id, component]));
+  const findings: ArchitectureRuleFinding[] = [];
+  for (const [key, relationships] of expected) {
+    const [sourceId, targetId] = key.split(":");
+    if (!componentToActual.has(sourceId!) || !componentToActual.has(targetId!)) continue;
+    if (observed.has(key)) continue;
+    const source = componentById.get(sourceId!);
+    const target = componentById.get(targetId!);
+    if (!source || !target) continue;
+    findings.push({
+      ruleId: "unrealized-intended-dependency",
+      title: "Intended dependency has no mapped code evidence",
+      severity: "info",
+      message: `The intended dependency from "${displayName(source.name)}" to "${displayName(target.name)}" has no observed dependency between their mapped code. Review the mapping and source graph.`,
+      entityIds: uniqueSorted([
+        source.id,
+        target.id,
+        ...(componentToActual.get(source.id) ?? []),
+        ...(componentToActual.get(target.id) ?? []),
+      ]),
+      relationshipIds: uniqueSorted(relationships.map((item) => item.id)),
+      evidenceIds: uniqueSorted([
+        ...source.evidenceIds,
+        ...target.evidenceIds,
+        ...relationships.flatMap((item) => item.evidenceIds),
+        ...mappings
+          .filter((mapping) => mapping.sourceEntityId === source.id || mapping.sourceEntityId === target.id)
+          .flatMap((item) => item.evidenceIds),
+      ]),
+    });
+  }
+  for (const [key, relationships] of observed) {
+    if (expected.has(key)) continue;
+    const [sourceId, targetId] = key.split(":");
+    const source = componentById.get(sourceId!);
+    const target = componentById.get(targetId!);
+    if (!source || !target) continue;
+    const sourceMappingIds = mappings.filter((item) => item.sourceEntityId === source.id).map((item) => item.id);
+    const targetMappingIds = mappings.filter((item) => item.sourceEntityId === target.id).map((item) => item.id);
+    findings.push({
+      ruleId: "unplanned-observed-dependency",
+      title: "Observed dependency is absent from intended architecture",
+      severity: "warning",
+      message: `Mapped code in "${displayName(source.name)}" depends on mapped code in "${displayName(target.name)}", but no intended dependency is recorded. Review whether intent or mappings should change.`,
+      entityIds: uniqueSorted([
+        source.id,
+        target.id,
+        ...relationships.flatMap((item) => [
+          item.sourceEntityId,
+          item.targetEntityId,
+        ]),
+      ]),
+      relationshipIds: uniqueSorted([
+        ...relationships.map((item) => item.id),
+        ...sourceMappingIds,
+        ...targetMappingIds,
+      ]),
+      evidenceIds: uniqueSorted([
+        ...relationships.flatMap((item) => item.evidenceIds),
+        ...mappings
+          .filter((item) => item.sourceEntityId === source.id || item.sourceEntityId === target.id)
+          .flatMap((item) => item.evidenceIds),
+      ]),
+    });
+  }
+  return findings;
 }
 
 function findDependencyCycles(

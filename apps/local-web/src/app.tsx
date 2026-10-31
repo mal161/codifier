@@ -16,6 +16,7 @@ import type {
 } from "@codifier/contracts";
 import {
   cancelAnalysisJob,
+  checkSourceFreshness,
   checkAgent,
   createIntendedComponent,
   getArchitectureRuleEvaluation,
@@ -25,7 +26,9 @@ import {
   listArchitectureTemplates,
   mapEntityToIntendedComponent,
   normalizeAgentUrl,
+  removeEntityMapping,
   startAnalysisJob,
+  type SourceFreshness,
   type AnalysisResult,
 } from "./agent/client.js";
 import { lookupEntitiesAtSourceLocation } from "./navigation/source-lookup.js";
@@ -43,6 +46,8 @@ export function App() {
   const [agentUrl, setAgentUrl] = useState(defaultAgentUrl);
   const [token, setToken] = useState("");
   const [repositoryPath, setRepositoryPath] = useState("");
+  const [excludePatternText, setExcludePatternText] = useState("");
+  const [respectGitignore, setRespectGitignore] = useState(true);
   const [snapshotRootPath, setSnapshotRootPath] = useState("");
   const [repositoryId, setRepositoryId] = useState("");
   const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
@@ -67,15 +72,21 @@ export function App() {
   const [sourceMatches, setSourceMatches] = useState<GraphEntity[] | null>(
     null,
   );
+  const [sourceFreshness, setSourceFreshness] = useState<{
+    entityId: string;
+    result: SourceFreshness;
+  } | null>(null);
   const [busyAction, setBusyAction] = useState<
     | "connect"
     | "load"
     | "analyze"
     | "intent-create"
     | "intent-map"
+    | "intent-unmap"
     | "marketplace-load"
     | "template-install"
     | "rules-load"
+    | "source-check"
     | null
   >(null);
   const isBusy = busyAction !== null;
@@ -138,7 +149,12 @@ export function App() {
     null;
   const sourceNavigation = useMemo(() => {
     const sourceRootPath = snapshotRootPath.trim() || repositoryPath.trim();
-    if (!selectedEntity?.source || !sourceRootPath) {
+    if (
+      !selectedEntity?.source ||
+      !sourceRootPath ||
+      sourceFreshness?.entityId !== selectedEntity.id ||
+      sourceFreshness.result.status !== "current"
+    ) {
       return { uri: null, error: null };
     }
     try {
@@ -152,7 +168,35 @@ export function App() {
       }
       return { uri: null, error: reason.message };
     }
-  }, [repositoryPath, selectedEntity, snapshotRootPath]);
+  }, [repositoryPath, selectedEntity, snapshotRootPath, sourceFreshness]);
+
+  async function verifySelectedSource(): Promise<void> {
+    if (!snapshot || !selectedEntity?.source) return;
+    const rootPath = snapshotRootPath.trim() || repositoryPath.trim();
+    if (!rootPath) {
+      setError("Enter the repository folder path to verify this source location.");
+      return;
+    }
+    setBusyAction("source-check");
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await checkSourceFreshness(
+        normalizeAgentUrl(agentUrl),
+        token,
+        snapshot.repositoryId,
+        rootPath,
+        selectedEntity.id,
+      );
+      setSourceFreshness({ entityId: selectedEntity.id, result });
+      if (result.status === "current") setNotice(result.message);
+      else setError(result.message);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  }
 
   async function connectToAgent(): Promise<void> {
     setBusyAction("connect");
@@ -249,6 +293,7 @@ export function App() {
         template.id,
       );
       setSnapshot(updatedSnapshot);
+      setSourceFreshness(null);
       setRepositoryId(updatedSnapshot.repositoryId);
       setMarketplaceTemplates((current) =>
         current.map((item) =>
@@ -277,10 +322,12 @@ export function App() {
         throw new Error("No saved graph exists for this repository UUID.");
       }
       setSnapshot(graph);
+      setSourceFreshness(null);
       setSnapshotRootPath(repositoryPath.trim());
       setAnalysis(null);
       setAnalysisJob(null);
       setSourceMatches(null);
+      setSourceFreshness(null);
       setRepositoryId(graph.repositoryId);
       setIsConnected(true);
       setSelectedEntityId(null);
@@ -307,6 +354,14 @@ export function App() {
         token,
         repositoryPath,
         repositoryId.trim() || undefined,
+        undefined,
+        {
+          excludePatterns: excludePatternText
+            .split(/\r?\n/)
+            .map((pattern) => pattern.trim())
+            .filter(Boolean),
+          respectGitignore,
+        },
       );
       setAnalysisJob(job);
       setRepositoryId(job.repositoryId);
@@ -343,6 +398,7 @@ export function App() {
       setAnalysis(result);
       const graph = await getGraph(baseUrl, token, job.repositoryId);
       setSnapshot(graph);
+      setSourceFreshness(null);
       if (result.persisted) {
         setSnapshotRootPath(analyzedRootPath);
       } else if (!graph) {
@@ -415,6 +471,7 @@ export function App() {
         );
       }
       setSnapshot(updatedSnapshot);
+      setSourceFreshness(null);
       setSelectedIntentComponentId(component.id);
       setSelectedEntityId(component.id);
       setIntendedComponentName("");
@@ -452,9 +509,33 @@ export function App() {
         selectedEntity.id,
       );
       setSnapshot(updatedSnapshot);
+      setSourceFreshness(null);
       setNotice(
         `Mapped "${selectedEntity.name}" to "${selectedIntentComponent.name}".`,
       );
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function unmapSelectedEntityFromIntent(): Promise<void> {
+    if (!snapshot || !selectedIntentComponent || !selectedEntity) return;
+    setBusyAction("intent-unmap");
+    setError(null);
+    setNotice(null);
+    try {
+      const updatedSnapshot = await removeEntityMapping(
+        normalizeAgentUrl(agentUrl),
+        token,
+        snapshot.repositoryId,
+        selectedIntentComponent.id,
+        selectedEntity.id,
+      );
+      setSnapshot(updatedSnapshot);
+      setSourceFreshness(null);
+      setNotice(`Removed the mapping for "${selectedEntity.name}".`);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -716,6 +797,38 @@ export function App() {
                       value={repositoryId}
                     />
                   </Field>
+                  <label className="flex items-start gap-2 text-xs leading-5 text-ink">
+                    <input
+                      checked={respectGitignore}
+                      className="mt-1 accent-forest"
+                      disabled={isBusy}
+                      onChange={(event) =>
+                        setRespectGitignore(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span>Honor repository .gitignore rules</span>
+                  </label>
+                  <Field
+                    label="Additional excluded paths (one glob per line)"
+                    htmlFor="analysis-exclusions"
+                  >
+                    <textarea
+                      className={`${inputClass} min-h-20 resize-y`}
+                      disabled={isBusy}
+                      id="analysis-exclusions"
+                      onChange={(event) =>
+                        setExcludePatternText(event.target.value)
+                      }
+                      placeholder={"generated/**\nfixtures/large-data"}
+                      spellCheck={false}
+                      value={excludePatternText}
+                    />
+                    <span className="mt-1.5 block text-[11px] leading-4 text-muted">
+                      Repository-relative patterns add exclusions; safety
+                      directories cannot be included.
+                    </span>
+                  </Field>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       className={primaryButtonClass}
@@ -842,6 +955,9 @@ export function App() {
 
               {analysis?.changeSummary && (
                 <AnalysisChangeSummaryCard summary={analysis.changeSummary} />
+              )}
+              {analysis?.reconciliation && (
+                <ReconciliationCard reconciliation={analysis.reconciliation} />
               )}
               {analysis && <CoverageCard analysis={analysis} />}
               {snapshot && <GitContextCard context={snapshot.gitContext} />}
@@ -1126,12 +1242,33 @@ export function App() {
                   onMapToIntendedComponent={() =>
                     void mapSelectedEntityToIntent()
                   }
+                  onUnmapFromIntendedComponent={() =>
+                    void unmapSelectedEntityFromIntent()
+                  }
+                  isUnmapping={busyAction === "intent-unmap"}
+                  isMapped={Boolean(
+                    snapshot?.relationships.some(
+                      (relationship) =>
+                        relationship.sourceEntityId ===
+                          selectedIntentComponent?.id &&
+                        relationship.targetEntityId === selectedEntity.id &&
+                        relationship.type === "MAPS_TO" &&
+                        relationship.state === "intended",
+                    ),
+                  )}
                   onSelectEntity={setSelectedEntityId}
                   relationships={relatedItems}
                   canMapToIntendedComponent={
                     isConnected && !isBusy && selectedIntentComponent !== null
                   }
                   sourceNavigation={sourceNavigation}
+                  onVerifySource={() => void verifySelectedSource()}
+                  isCheckingSource={busyAction === "source-check"}
+                  sourceFreshness={
+                    sourceFreshness?.entityId === selectedEntity.id
+                      ? sourceFreshness.result
+                      : null
+                  }
                 />
               ) : (
                 <div className="flex h-full min-h-[320px] flex-col items-center justify-center px-6 text-center">
@@ -1787,6 +1924,46 @@ function AnalysisChangeSummaryCard({
   );
 }
 
+function ReconciliationCard({
+  reconciliation,
+}: {
+  reconciliation: NonNullable<AnalysisResult["reconciliation"]>;
+}) {
+  const changedCount =
+    reconciliation.addedFiles.length +
+    reconciliation.changedFiles.length +
+    reconciliation.removedFiles.length +
+    reconciliation.renamedFiles.length;
+  return (
+    <section
+      aria-label="File reconciliation"
+      className="rounded-2xl border border-line bg-white p-5 shadow-card"
+    >
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-forest">
+        File reconciliation
+      </p>
+      <h2 className="mt-1 text-base font-semibold tracking-[-0.03em]">
+        {reconciliation.mode === "initial"
+          ? "Initial analysis"
+          : reconciliation.mode === "unchanged"
+            ? "No analyzed file changes"
+            : `${changedCount} file change${changedCount === 1 ? "" : "s"}`}
+      </h2>
+      <p className="mt-2 text-[11px] leading-5 text-muted">
+        {reconciliation.reason}
+      </p>
+      {reconciliation.mode === "full-fallback" && (
+        <dl className="mt-3 space-y-1 text-[11px] text-muted">
+          <div>Added: {reconciliation.addedFiles.length}</div>
+          <div>Edited: {reconciliation.changedFiles.length}</div>
+          <div>Removed: {reconciliation.removedFiles.length}</div>
+          <div>Renamed: {reconciliation.renamedFiles.length}</div>
+        </dl>
+      )}
+    </section>
+  );
+}
+
 function ChangeSummaryRow({
   label,
   counts,
@@ -2067,18 +2244,27 @@ function EntityDetails({
   evidence,
   intendedComponent,
   isMapping,
+  isMapped,
+  isUnmapping,
+  onUnmapFromIntendedComponent,
   onMapToIntendedComponent,
   onCopyLocation,
   onSelectEntity,
   relationships,
   sourceNavigation,
+  onVerifySource,
+  isCheckingSource,
+  sourceFreshness,
 }: {
   canMapToIntendedComponent: boolean;
   entity: GraphEntity;
   evidence: Evidence[];
   intendedComponent: GraphEntity | null;
   isMapping: boolean;
+  isMapped: boolean;
+  isUnmapping: boolean;
   onMapToIntendedComponent: () => void;
+  onUnmapFromIntendedComponent: () => void;
   onCopyLocation: (locator: SourceLocator) => void;
   onSelectEntity: (entityId: string) => void;
   relationships: {
@@ -2087,6 +2273,9 @@ function EntityDetails({
     evidence: Evidence[];
   }[];
   sourceNavigation: { uri: string | null; error: string | null };
+  onVerifySource: () => void;
+  isCheckingSource: boolean;
+  sourceFreshness: SourceFreshness | null;
 }) {
   return (
     <div>
@@ -2117,6 +2306,14 @@ function EntityDetails({
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <button
+                className={`${secondaryButtonClass} min-h-8 px-2.5 py-1.5 text-[10px]`}
+                disabled={isCheckingSource}
+                onClick={onVerifySource}
+                type="button"
+              >
+                {isCheckingSource ? "Checking source…" : "Check freshness"}
+              </button>
               <a
                 aria-disabled={!sourceNavigation.uri}
                 aria-label={`Open ${entity.source.repositoryRelativePath} at line ${entity.source.range.start.line} in VS Code`}
@@ -2136,7 +2333,12 @@ function EntityDetails({
                 Copy location
               </button>
             </div>
-            {!sourceNavigation.uri && (
+            {sourceFreshness && sourceFreshness.status !== "current" && (
+              <p className="text-[10px] leading-4 text-red-800" role="status">
+                {sourceFreshness.message}
+              </p>
+            )}
+            {!sourceNavigation.uri && !sourceFreshness && (
               <p className="text-[10px] leading-4 text-muted">
                 {sourceNavigation.error ??
                   "Enter the repository folder path to enable editor navigation."}
@@ -2176,6 +2378,16 @@ function EntityDetails({
                 >
                   {isMapping ? "Mapping…" : "Map selected code to component"}
                 </button>
+                {isMapped && (
+                  <button
+                    className={`${secondaryButtonClass} mt-2 min-h-8 px-2.5 py-1.5 text-[10px]`}
+                    disabled={isUnmapping}
+                    onClick={onUnmapFromIntendedComponent}
+                    type="button"
+                  >
+                    {isUnmapping ? "Removing mapping…" : "Remove mapping"}
+                  </button>
+                )}
               </>
             ) : (
               <p className="mt-1.5 text-[11px] leading-5 text-muted">

@@ -5,16 +5,18 @@ This roadmap separates a focused learning release from the larger product vision
 See the [implementation plan](IMPLEMENTATION_PLAN.md) for phase work, deliverables, and exit gates.
 See [product requirements](PRODUCT_REQUIREMENTS.md) for MVP requirements and explicit scope boundaries.
 
-## MVP: Local agent, analysis, and synchronization
+## MVP: Local agent, analysis, and traceability
 
-Follow the ordered milestones in [the implementation plan](IMPLEMENTATION_PLAN.md#revised-mvp-execution-order):
+Follow the verified remaining work and exit gates in [the phase plan](REMAINING_FEATURES_PHASES.md):
 
 - Establish pnpm/Turborepo workspace and canonical graph/domain contracts.
-- Persist local state in SQLite and optionally synchronize approved graph metadata/events to cloud PostgreSQL.
+- Persist local state in SQLite. Cloud synchronization is conditional and requires explicit data-sharing and conflict decisions first.
 - Implement the standalone authenticated local agent and shared CLI, VS Code, and local web clients.
 - Analyze TypeScript/JavaScript with evidence-backed identity, relationships, and exact bidirectional source links.
 - Add incremental analysis/sync, React Flow visualization, intended/actual comparison, Git integration, and basic architecture rules.
 - Keep analysis offline-capable and source files local by default; validate local API/browser security.
+
+The current foundation, initial Phase 4 slice, and first VS Code extension client are implemented. The extension supports secure agent connection, workspace analysis, architecture lookup for the active file, and freshness-checked source navigation. Selective incremental analysis, broader stale-location state, auditable exceptions, full drift coverage, formal accessibility review, extension-host/VSIX verification, and the separate React/Express walkthrough remain before the local MVP can pass its stated acceptance gates.
 
 The initial analyzer target prioritizes React and Express conventions. Python/Django/Flask are later.
 

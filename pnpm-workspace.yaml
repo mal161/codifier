@@ -4,3 +4,4 @@ packages:
 allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true
+  '@vscode/vsce-sign': false

@@ -73,7 +73,7 @@ describe("evaluateArchitectureRules", () => {
     expect(result).toMatchObject({
       repositoryId,
       revision: "a1b2c3d",
-      ruleSetVersion: "1.0.0",
+      ruleSetVersion: "1.1.0",
     });
     expect(result.findings).toContainEqual(
       expect.objectContaining({
@@ -214,6 +214,72 @@ describe("evaluateArchitectureRules", () => {
     expect(
       result.findings.some((finding) => finding.ruleId === "dependency-cycle"),
     ).toBe(false);
+  });
+
+  it("compares intended component dependencies with dependencies between mapped code", () => {
+    const graph = snapshot();
+    graph.relationships.push(
+      {
+        id: firstMappingId,
+        sourceEntityId: firstComponentId,
+        targetEntityId: firstFileId,
+        type: "MAPS_TO",
+        state: "intended",
+        evidenceIds: [firstEvidenceId],
+      },
+      {
+        id: secondMappingId,
+        sourceEntityId: secondComponentId,
+        targetEntityId: secondFileId,
+        type: "MAPS_TO",
+        state: "intended",
+        evidenceIds: [secondEvidenceId],
+      },
+      {
+        id: firstRelationshipId,
+        sourceEntityId: firstFileId,
+        targetEntityId: secondFileId,
+        type: "IMPORTS",
+        state: "actual",
+        evidenceIds: [firstEvidenceId],
+      },
+    );
+
+    const unplanned = evaluateArchitectureRules(graph).findings.find(
+      (finding) => finding.ruleId === "unplanned-observed-dependency",
+    );
+    expect(unplanned).toMatchObject({
+      severity: "warning",
+      entityIds: [secondFileId, firstFileId, firstComponentId, secondComponentId],
+      relationshipIds: [firstRelationshipId, firstMappingId, secondMappingId],
+      evidenceIds: [firstEvidenceId, secondEvidenceId],
+    });
+
+    graph.relationships.push({
+      id: secondRelationshipId,
+      sourceEntityId: firstComponentId,
+      targetEntityId: secondComponentId,
+      type: "DEPENDS_ON",
+      state: "intended",
+      evidenceIds: [secondEvidenceId],
+    });
+    expect(
+      evaluateArchitectureRules(graph).findings.some(
+        (finding) => finding.ruleId === "unplanned-observed-dependency",
+      ),
+    ).toBe(false);
+
+    graph.relationships = graph.relationships.filter(
+      (relationship) => relationship.id !== firstRelationshipId,
+    );
+    expect(evaluateArchitectureRules(graph).findings).toContainEqual(
+      expect.objectContaining({
+        ruleId: "unrealized-intended-dependency",
+        severity: "info",
+        entityIds: [secondFileId, firstFileId, firstComponentId, secondComponentId],
+        relationshipIds: [secondRelationshipId],
+      }),
+    );
   });
 
   it("returns findings in a stable order", () => {

@@ -21,3 +21,4 @@ logs/
 Thumbs.db
 .vscode/*
 !.vscode/extensions.json
+!.vscode/launch.json

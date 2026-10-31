@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { validateGraphSnapshot } from "@codifier/domain";
 import {
   analyzeRepository,
   RepositoryAnalysisCancelledError,
+  validateSourceFreshness,
   type RepositoryAnalysisReport,
 } from "../src/index.js";
 
@@ -52,6 +53,31 @@ afterEach(async () => {
 });
 
 describe("analyzeRepository", () => {
+  it("requires a matching analyzed file before source locations are trusted", async () => {
+    const root = await createTemporaryRepository();
+    const sourcePath = join(root, "current.ts");
+    await writeFile(sourcePath, "export const current = 1;\n");
+    const report = await analyzeRepository({ repositoryId, repositoryRoot: root });
+    const entity = report.snapshot.entities.find(
+      (item) => item.kind === "symbol" && item.name === "current",
+    )!;
+
+    await expect(
+      validateSourceFreshness(root, report.snapshot, entity.id),
+    ).resolves.toEqual({
+      status: "current",
+      message: "The file matches the analyzed source revision.",
+    });
+    await writeFile(sourcePath, "export const current = 2;\n");
+    await expect(
+      validateSourceFreshness(root, report.snapshot, entity.id),
+    ).resolves.toMatchObject({ status: "stale" });
+    await unlink(sourcePath);
+    await expect(
+      validateSourceFreshness(root, report.snapshot, entity.id),
+    ).resolves.toMatchObject({ status: "stale" });
+  });
+
   it("extracts declarations, local imports, coverage, and exact source ranges", async () => {
     const progress: string[] = [];
     const report = await analyzeRepository({
@@ -122,6 +148,32 @@ describe("analyzeRepository", () => {
     });
 
     expect(first.snapshot).toEqual(second.snapshot);
+  });
+
+  it("reports edits, additions, removals, and unambiguous renames during reconciliation", async () => {
+    const root = await createTemporaryRepository();
+    await writeFile(join(root, "edited.ts"), "export const value = 1;\n");
+    await writeFile(join(root, "moved.ts"), "export const moved = 2;\n");
+    await writeFile(join(root, "deleted.ts"), "export const deleted = 3;\n");
+    const previous = await analyzeRepository({ repositoryId, repositoryRoot: root });
+    await writeFile(join(root, "edited.ts"), "export const value = 3;\n");
+    await rename(join(root, "moved.ts"), join(root, "renamed.ts"));
+    await unlink(join(root, "deleted.ts"));
+    await writeFile(join(root, "added.ts"), "export const added = 4;\n");
+    const current = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+      previousSnapshot: previous.snapshot,
+    });
+
+    expect(current.reconciliation).toMatchObject({
+      mode: "full-fallback",
+      addedFiles: ["added.ts"],
+      changedFiles: ["edited.ts"],
+      removedFiles: ["deleted.ts"],
+      renamedFiles: [{ from: "moved.ts", to: "renamed.ts" }],
+    });
+    expect(current.reconciliation.reason).toContain("full analysis");
   });
 
   it("preserves intended components and mappings while dropping mappings to removed code", async () => {
@@ -333,6 +385,82 @@ describe("analyzeRepository", () => {
     expect(complete.canPersist).toBe(true);
   });
 
+  it("applies nested gitignore rules and ordered negations", async () => {
+    const root = await createTemporaryRepository();
+    await mkdir(join(root, "nested"), { recursive: true });
+    await writeFile(join(root, ".gitignore"), "root-ignored.ts\n");
+    await writeFile(
+      join(root, "nested", ".gitignore"),
+      "*.tmp.ts\n!keep.tmp.ts\n",
+    );
+    await writeFile(
+      join(root, "root-ignored.ts"),
+      "export const ignored = 1;\n",
+    );
+    await writeFile(
+      join(root, "nested", "drop.tmp.ts"),
+      "export const drop = 1;\n",
+    );
+    await writeFile(
+      join(root, "nested", "keep.tmp.ts"),
+      "export const keep = 1;\n",
+    );
+
+    const report = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+    });
+    const filePaths = report.snapshot.entities
+      .filter((entity) => entity.kind === "file")
+      .map((entity) => entity.name);
+
+    expect(filePaths).toEqual(["nested/keep.tmp.ts"]);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "gitignored",
+          path: "root-ignored.ts",
+        }),
+        expect.objectContaining({
+          code: "gitignored",
+          path: "nested/drop.tmp.ts",
+        }),
+      ]),
+    );
+  });
+
+  it("applies user exclusions without overriding hard safety directories", async () => {
+    const root = await createTemporaryRepository();
+    await mkdir(join(root, "node_modules", "pkg"), { recursive: true });
+    await mkdir(join(root, "generated"), { recursive: true });
+    await writeFile(
+      join(root, "node_modules", "pkg", "hidden.ts"),
+      "export const hidden = 1;\n",
+    );
+    await writeFile(
+      join(root, "generated", "ignored.ts"),
+      "export const ignored = 1;\n",
+    );
+    await writeFile(join(root, "main.ts"), "export const visible = 1;\n");
+
+    const report = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+      excludePatterns: ["generated/**", "node_modules/**"],
+    });
+
+    expect(
+      report.snapshot.entities
+        .filter((entity) => entity.kind === "file")
+        .map((entity) => entity.name),
+    ).toEqual(["main.ts"]);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "user_excluded", path: "generated" }),
+      ]),
+    );
+  });
+
   it("enforces the cumulative source-read limit", async () => {
     const root = await createTemporaryRepository();
     await writeFile(join(root, "a.ts"), "export const first = 1;\n");
@@ -493,6 +621,17 @@ describe("analyzeRepository", () => {
     });
     expect(report.diagnostics).not.toContainEqual(
       expect.objectContaining({ code: "unresolved_local_import" }),
+    );
+    expect(report.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "unsupported_local_import",
+        path: "apps/web/src/app.tsx",
+        message: expect.stringContaining("apps/web/src/styles.css"),
+        range: {
+          start: { line: 2, column: 0 },
+          end: { line: 2, column: 22 },
+        },
+      }),
     );
     expect(report.canPersist).toBe(true);
     expect(validateGraphSnapshot(report.snapshot)).toEqual([]);

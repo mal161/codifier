@@ -61,6 +61,40 @@ const migrations: Migration[] = [
         CHECK (git_context_json IS NULL OR json_valid(git_context_json))`,
     ],
   },
+  {
+    id: "0003_graph_revisions",
+    statements: [
+      `CREATE TABLE graph_revisions (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        parent_revision_id TEXT REFERENCES graph_revisions(id),
+        sequence INTEGER NOT NULL,
+        source_revision TEXT,
+        content_hash TEXT NOT NULL,
+        change_summary_json TEXT NOT NULL CHECK (json_valid(change_summary_json)),
+        snapshot_json TEXT NOT NULL CHECK (json_valid(snapshot_json)),
+        created_at INTEGER NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX graph_revisions_repository_sequence
+        ON graph_revisions(repository_id, sequence)`,
+      `ALTER TABLE repositories
+        ADD COLUMN current_graph_revision_id TEXT`,
+    ],
+  },
+  {
+    id: "0004_durable_analysis_jobs",
+    statements: [
+      `CREATE TABLE analysis_jobs (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        job_json TEXT NOT NULL CHECK (json_valid(job_json)),
+        request_json TEXT NOT NULL CHECK (json_valid(request_json)),
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX analysis_jobs_updated_at ON analysis_jobs(updated_at)`,
+    ],
+  },
 ];
 
 export function applyMigrations(database: BetterSqlite3.Database): void {

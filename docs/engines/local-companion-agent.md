@@ -60,4 +60,4 @@ Repository paths and requested operations are untrusted API inputs. Resolve and 
 - A hosted page cannot access the agent without explicit pairing and passing browser-origin/private-network safeguards.
 - Agent crashes, malformed repository files, or sync errors are visible and recoverable without losing committed local graph state.
 
-See [technology stack](../TECH_STACK.md), [security and privacy](../SECURITY_PRIVACY.md), and [MVP implementation order](../IMPLEMENTATION_PLAN.md#revised-mvp-execution-order).
+See [technology stack](../TECH_STACK.md), [security and privacy](../SECURITY_PRIVACY.md), and [MVP implementation phases](../REMAINING_FEATURES_PHASES.md).

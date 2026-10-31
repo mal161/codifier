@@ -157,7 +157,7 @@ Create the tree as implementation starts, not all at once:
 2. SQLite/PostgreSQL storage package and graph use cases.
 3. Local agent, authenticated REST/WebSockets, CLI, and agent client.
 4. TypeScript/JavaScript analysis packages, identity/evidence, and incremental jobs.
-5. Local web and VS Code clients, visualization, and exact source navigation. The local web explorer supports graph-to-source links through the VS Code URI handler and source-location-to-graph lookup; editor-integrated source-to-graph navigation and the VS Code extension remain future work.
+5. Local web and VS Code clients, visualization, and exact source navigation. The initial local web explorer and `apps/vscode-extension` both use the local agent; the extension supports source-to-architecture lookup and freshness-checked architecture-to-source navigation. Host verification and VSIX packaging remain pending.
 6. Sync endpoints/outbox, intended/actual comparison, Git, and architecture rules according to the agreed MVP sequence.
 
 The [development setup](DEVELOPMENT_SETUP.md) documents how to run the current local agent and the remaining packaging, security, and policy decisions before expanding the scaffold.

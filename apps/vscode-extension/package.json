@@ -1,0 +1,66 @@
+{
+  "name": "codifier-vscode",
+  "displayName": "Codifier Architecture Explorer",
+  "description": "Navigate evidence-backed Codifier architecture graphs from VS Code using the local companion agent.",
+  "version": "0.1.0",
+  "publisher": "codifier-local",
+  "license": "MIT",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "vscode": ">=1.90.0"
+  },
+  "main": "./src/extension.cjs",
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:codifier.connect",
+    "onCommand:codifier.status",
+    "onCommand:codifier.analyzeWorkspace",
+    "onCommand:codifier.showArchitectureForCurrentFile",
+    "onCommand:codifier.openSourceFromArchitecture"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codifier.connect",
+        "title": "Codifier: Connect to Local Agent"
+      },
+      {
+        "command": "codifier.status",
+        "title": "Codifier: Show Connection Status"
+      },
+      {
+        "command": "codifier.analyzeWorkspace",
+        "title": "Codifier: Analyze Workspace"
+      },
+      {
+        "command": "codifier.showArchitectureForCurrentFile",
+        "title": "Codifier: Show Architecture for Current File"
+      },
+      {
+        "command": "codifier.openSourceFromArchitecture",
+        "title": "Codifier: Open Source from Architecture"
+      }
+    ],
+    "configuration": {
+      "title": "Codifier",
+      "properties": {
+        "codifier.agentUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4141",
+          "description": "HTTP URL for the local Codifier agent. Only loopback hosts are accepted."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "lint": "eslint src test",
+    "typecheck": "node --check src/agent.cjs && node --check src/extension.cjs",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^4.1.0"
+  }
+}

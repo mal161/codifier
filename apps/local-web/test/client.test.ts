@@ -135,6 +135,8 @@ describe("local agent client", () => {
       expect(init?.method).toBe("POST");
       expect(JSON.parse(String(init?.body))).toEqual({
         rootPath: "C:\\projects\\sample",
+        excludePatterns: ["generated/**"],
+        respectGitignore: false,
       });
       return new Response(JSON.stringify(analysisJob()), { status: 202 });
     });
@@ -146,6 +148,7 @@ describe("local agent client", () => {
         " C:\\projects\\sample ",
         undefined,
         fetcher,
+        { excludePatterns: ["generated/**"], respectGitignore: false },
       ),
     ).resolves.toMatchObject({ id: jobId, status: "running" });
 
@@ -283,7 +286,7 @@ describe("local agent client", () => {
     const evaluation = {
       repositoryId,
       revision: "a1b2c3d",
-      ruleSetVersion: "1.0.0",
+      ruleSetVersion: "1.1.0",
       findings: [
         {
           ruleId: "unmapped-intended-component",

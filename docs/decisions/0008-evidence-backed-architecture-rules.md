@@ -10,7 +10,7 @@ The MVP calls for explicit architecture checks over the canonical graph. Finding
 ## Decision
 
 - Evaluate a versioned, deterministic built-in rule set against the saved graph in the local agent.
-- The initial checks report actual dependency cycles (`IMPORTS`, `DEPENDS_ON`, and `REEXPORTS`), observed entities mapped to multiple intended components, and intended components with no mapped observed code.
+- The checks report actual dependency cycles (`IMPORTS`, `DEPENDS_ON`, and `REEXPORTS`), observed entities mapped to multiple intended components, intended components with no mapped observed code, and mismatch between intended component dependencies and imports observed between explicitly mapped code.
 - Findings return their rule ID, review severity, message, related entity and relationship IDs, and supporting evidence IDs. They are derived results, not persisted graph facts.
 - The local web client displays evidence and links findings to graph items.
 - Findings are review prompts, not compliance claims or automatic edits. Do not execute repository code.
@@ -27,4 +27,5 @@ The MVP calls for explicit architecture checks over the canonical graph. Finding
 - Rule results can be recalculated from each saved graph without schema migrations.
 - Evidence IDs and graph references let developers inspect the input facts behind each finding.
 - Rule-set versioning is exposed so results can be interpreted against the checks that produced them.
+- Rule set version 1.1.0 adds mapped dependency drift checks. Unmapped endpoints do not produce inferred component dependencies, and findings remain review prompts.
 - Extending or authoring rules requires explicit semantics, evidence requirements, bounded evaluation, and client presentation.

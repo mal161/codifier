@@ -51,7 +51,7 @@ describe("architectureRuleEvaluationSchema", () => {
   const validEvaluation = {
     repositoryId: "7b9442d6-faaa-49f9-a39e-7de8a276a978",
     revision: "a1b2c3d",
-    ruleSetVersion: "1.0.0",
+    ruleSetVersion: "1.1.0",
     findings: [
       {
         ruleId: "dependency-cycle",

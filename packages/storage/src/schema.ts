@@ -11,8 +11,50 @@ export const repositories = sqliteTable("repositories", {
   id: text("id").primaryKey(),
   revision: text("revision"),
   gitContextJson: text("git_context_json"),
+  currentGraphRevisionId: text("current_graph_revision_id"),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
+
+export const graphRevisions = sqliteTable(
+  "graph_revisions",
+  {
+    id: text("id").primaryKey(),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    parentRevisionId: text("parent_revision_id"),
+    sequence: integer("sequence").notNull(),
+    sourceRevision: text("source_revision"),
+    contentHash: text("content_hash").notNull(),
+    changeSummaryJson: text("change_summary_json").notNull(),
+    snapshotJson: text("snapshot_json").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.parentRevisionId],
+      foreignColumns: [table.id],
+      name: "graph_revision_parent",
+    }),
+    uniqueIndex("graph_revisions_repository_sequence").on(
+      table.repositoryId,
+      table.sequence,
+    ),
+  ],
+);
+
+export const analysisJobs = sqliteTable(
+  "analysis_jobs",
+  {
+    id: text("id").primaryKey(),
+    repositoryId: text("repository_id").notNull(),
+    status: text("status").notNull(),
+    jobJson: text("job_json").notNull(),
+    requestJson: text("request_json").notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [index("analysis_jobs_updated_at").on(table.updatedAt)],
+);
 
 export const evidence = sqliteTable(
   "evidence",
