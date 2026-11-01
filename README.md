@@ -53,7 +53,7 @@ The agent listens only on your own machine (`127.0.0.1`) and requires a secret t
 - Your agent token is stored in VS Code's secure storage, never in settings or logs.
 
 ### History
-- Every successful analysis is saved as a new revision; earlier revisions are kept. Through the agent's API you can list them, view one, and restore it. Restoring adds a new revision rather than deleting history.
+- Every successful analysis is saved as a new revision; earlier revisions are kept. You can list, view, and restore them from the web explorer or the agent's API, and export the whole history as JSON (`graph history <repository-uuid>`). Restoring adds a new revision rather than deleting history.
 
 ## Requirements
 

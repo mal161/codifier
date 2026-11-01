@@ -415,4 +415,50 @@ describe("SQLite graph store", () => {
       store.getAnalysisJob("0c2d4f61-9c2e-4d6b-a8a4-6c3f2b9f4a02"),
     ).toMatchObject({ status: "completed" });
   });
+  it("exports verified revision history without job records", () => {
+    const databasePath = createTemporaryDatabasePath();
+    const store = openGraphStore(databasePath);
+    stores.push(store);
+    expect(store.exportGraphHistory(repositoryId)).toBeNull();
+    store.replaceGraph(createSnapshot(), {
+      id: "8d1c2b7e-3f4a-4c5d-9e6f-7a8b9c0d1e2f",
+      repositoryId,
+      status: "completed",
+      jobJson: JSON.stringify({ status: "completed" }),
+      requestJson: JSON.stringify({ rootPath: "/private/repo" }),
+    });
+    store.replaceGraph(createSnapshot("updated"));
+    const [first] = store.listGraphRevisions(repositoryId);
+    const restored = store.restoreGraphRevision(repositoryId, first!.id)!;
+
+    const exported = store.exportGraphHistory(repositoryId)!;
+
+    expect(exported).toMatchObject({
+      format: "codifier.graph-history",
+      formatVersion: 1,
+      repositoryId,
+      currentRevisionId: restored.revision.id,
+    });
+    expect(exported.revisions.map(({ sequence }) => sequence)).toEqual([
+      1, 2, 3,
+    ]);
+    expect(exported.revisions.map(({ snapshot }) => snapshot)).toEqual([
+      createSnapshot(),
+      createSnapshot("updated"),
+      createSnapshot(),
+    ]);
+    expect(exported.revisions[2]!.restoredFromRevisionId).toBe(first!.id);
+    expect(JSON.stringify(exported)).not.toContain("/private/repo");
+
+    const tamperedDatabase = new BetterSqlite3(databasePath);
+    tamperedDatabase
+      .prepare(
+        "UPDATE graph_revisions SET content_hash = 'forged' WHERE sequence = 2",
+      )
+      .run();
+    tamperedDatabase.close();
+    expect(() => store.exportGraphHistory(repositoryId)).toThrow(
+      StorageCorruptionError,
+    );
+  });
 });

@@ -419,6 +419,26 @@ export function createAgentServer(
     },
   );
 
+  app.get<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/history/export",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      const exported = options.store.exportGraphHistory(repositoryId);
+      if (!exported) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      return reply
+        .header(
+          "content-disposition",
+          `attachment; filename="codifier-history-${repositoryId}.json"`,
+        )
+        .send(exported);
+    },
+  );
+
   app.post<{ Params: RepositoryParams & { revisionId: string } }>(
     "/v1/repositories/:repositoryId/revisions/:revisionId/restore",
     async (request, reply) => {

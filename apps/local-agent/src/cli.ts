@@ -94,6 +94,18 @@ graph
   });
 
 graph
+  .command("history <repositoryId>")
+  .description(
+    "Print the verified revision history as JSON (redirect to a file to export it)",
+  )
+  .action(async (repositoryId: string) => {
+    const response = await agentFetch(
+      `/v1/repositories/${encodeURIComponent(repositoryId)}/history/export`,
+    );
+    await printResponse(response);
+  });
+
+graph
   .command("put <snapshotFile>")
   .description("Validate and replace the graph snapshot from a JSON file")
   .action(async (snapshotFile: string) => {

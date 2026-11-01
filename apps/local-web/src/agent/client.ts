@@ -34,7 +34,9 @@ export interface AnalysisResult extends AnalysisJobResult {
   repositoryId: string;
 }
 
-export type SourceFreshness = ReturnType<typeof sourceFreshnessResultSchema.parse>;
+export type SourceFreshness = ReturnType<
+  typeof sourceFreshnessResultSchema.parse
+>;
 
 export function normalizeAgentUrl(value: string): string {
   let url: URL;
@@ -281,7 +283,9 @@ export async function removeEntityMapping(
   fetcher: typeof fetch = fetch,
 ): Promise<GraphSnapshot> {
   if (![repositoryId, componentId, entityId].every(isRepositoryId)) {
-    throw new Error("Repository, component, and entity IDs must be valid UUIDs.");
+    throw new Error(
+      "Repository, component, and entity IDs must be valid UUIDs.",
+    );
   }
   const response = await request(
     baseUrl,
@@ -291,8 +295,156 @@ export async function removeEntityMapping(
     fetcher,
   );
   const parsed = graphSnapshotSchema.safeParse(response);
-  if (!parsed.success) throw new Error("The agent returned an invalid graph snapshot.");
+  if (!parsed.success)
+    throw new Error("The agent returned an invalid graph snapshot.");
   return parsed.data;
+}
+
+export interface GraphRevisionSummary {
+  id: string;
+  parentRevisionId: string | null;
+  sequence: number;
+  sourceRevision: string | null;
+  restoredFromRevisionId: string | null;
+  createdAt: number;
+  changeCounts: { added: number; changed: number; removed: number };
+}
+
+export async function listGraphRevisions(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphRevisionSummary[]> {
+  if (!isRepositoryId(repositoryId)) {
+    throw new Error("Repository UUID must be a valid UUID.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/revisions`,
+    {},
+    fetcher,
+  );
+  if (!isRecord(response) || !Array.isArray(response.revisions)) {
+    throw new Error("The agent returned an invalid revision history.");
+  }
+  return response.revisions.map((value) => {
+    const revision = parseRevisionRecord(value);
+    if (!revision) {
+      throw new Error("The agent returned an invalid revision history.");
+    }
+    return revision;
+  });
+}
+
+export async function restoreGraphRevision(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  revisionId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<{
+  status: "restored" | "unchanged";
+  revision: GraphRevisionSummary;
+  graph: GraphSnapshot;
+}> {
+  if (![repositoryId, revisionId].every(isRepositoryId)) {
+    throw new Error("Repository and revision IDs must be valid UUIDs.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/revisions/${encodeURIComponent(revisionId)}/restore`,
+    { method: "POST" },
+    fetcher,
+  );
+  const revision = isRecord(response)
+    ? parseRevisionRecord(response.revision)
+    : null;
+  const graph = isRecord(response)
+    ? graphSnapshotSchema.safeParse(response.graph)
+    : null;
+  if (
+    !isRecord(response) ||
+    (response.status !== "restored" && response.status !== "unchanged") ||
+    !revision ||
+    !graph?.success ||
+    graph.data.repositoryId !== repositoryId
+  ) {
+    throw new Error("The agent returned an invalid restore result.");
+  }
+  return { status: response.status, revision, graph: graph.data };
+}
+
+/** Returns the verified history export as formatted JSON text for saving. */
+export async function exportGraphHistory(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  if (!isRepositoryId(repositoryId)) {
+    throw new Error("Repository UUID must be a valid UUID.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/history/export`,
+    {},
+    fetcher,
+  );
+  if (
+    !isRecord(response) ||
+    response.format !== "codifier.graph-history" ||
+    response.formatVersion !== 1 ||
+    response.repositoryId !== repositoryId ||
+    !Array.isArray(response.revisions)
+  ) {
+    throw new Error("The agent returned an invalid history export.");
+  }
+  return `${JSON.stringify(response, null, 2)}
+`;
+}
+
+function parseRevisionRecord(value: unknown): GraphRevisionSummary | null {
+  if (!isRecord(value) || !isRecord(value.changeSummary)) return null;
+  const nullableId = (field: unknown) =>
+    field === null || (typeof field === "string" && isRepositoryId(field));
+  if (
+    typeof value.id !== "string" ||
+    !isRepositoryId(value.id) ||
+    !nullableId(value.parentRevisionId) ||
+    !nullableId(value.restoredFromRevisionId ?? null) ||
+    !Number.isSafeInteger(value.sequence) ||
+    Number(value.sequence) < 1 ||
+    !(
+      value.sourceRevision === null || typeof value.sourceRevision === "string"
+    ) ||
+    !Number.isFinite(value.createdAt)
+  ) {
+    return null;
+  }
+  const changeCounts = { added: 0, changed: 0, removed: 0 };
+  for (const group of ["entities", "relationships", "evidence"] as const) {
+    const summary = value.changeSummary[group];
+    if (!isRecord(summary)) return null;
+    for (const kind of ["added", "changed", "removed"] as const) {
+      const ids = summary[kind];
+      if (!Array.isArray(ids)) return null;
+      changeCounts[kind] += ids.length;
+    }
+  }
+  return {
+    id: value.id,
+    parentRevisionId: value.parentRevisionId as string | null,
+    sequence: Number(value.sequence),
+    sourceRevision: value.sourceRevision,
+    restoredFromRevisionId:
+      (value.restoredFromRevisionId as string | null | undefined) ?? null,
+    createdAt: Number(value.createdAt),
+    changeCounts,
+  };
 }
 
 export async function analyzeRepository(

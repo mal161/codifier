@@ -196,6 +196,84 @@ describe("local agent API", () => {
     expect(invalid.status).toBe(400);
   });
 
+  it("exports verified revision history through the API", async () => {
+    const { baseUrl } = await startTestServer();
+    const store = stores.at(-1)!;
+    const exportUrl = `${baseUrl}/v1/repositories/${repositoryId}/history/export`;
+
+    expect((await fetch(exportUrl)).status).toBe(401);
+    expect((await fetch(exportUrl, { headers: headers() })).status).toBe(404);
+    expect(
+      (
+        await fetch(`${baseUrl}/v1/repositories/not-a-uuid/history/export`, {
+          headers: headers(),
+        })
+      ).status,
+    ).toBe(400);
+
+    store.replaceGraph(createSnapshot());
+    store.replaceGraph(createSnapshot("updated"));
+    const response = await fetch(exportUrl, { headers: headers() });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toContain(
+      `codifier-history-${repositoryId}.json`,
+    );
+    const exported = (await response.json()) as {
+      format: string;
+      currentRevisionId: string;
+      revisions: Array<{ id: string; sequence: number; snapshot: unknown }>;
+    };
+    expect(exported.format).toBe("codifier.graph-history");
+    expect(exported.revisions.map(({ sequence }) => sequence)).toEqual([1, 2]);
+    expect(exported.revisions[1]!.snapshot).toEqual(createSnapshot("updated"));
+    expect(exported.currentRevisionId).toBe(exported.revisions[1]!.id);
+  });
+
+  it("refuses to restore a revision while an analysis job is active", async () => {
+    const { baseUrl } = await startTestServer();
+    const store = stores.at(-1)!;
+    const root = await mkdtemp(join(tmpdir(), "codifier-agent-restore-busy-"));
+    temporaryDirectories.push(root);
+    await Promise.all(
+      Array.from({ length: 800 }, (_, index) =>
+        writeFile(
+          join(root, `file-${index}.ts`),
+          `export const value${index} = ${index};
+`,
+        ),
+      ),
+    );
+    store.replaceGraph(createSnapshot());
+    store.replaceGraph(createSnapshot("updated"));
+    const [first] = store.listGraphRevisions(repositoryId);
+
+    const start = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/analysis-jobs`,
+      {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify({ rootPath: root }),
+      },
+    );
+    expect(start.status).toBe(202);
+    const accepted = (await start.json()) as { id: string };
+
+    const restore = await fetch(
+      `${baseUrl}/v1/repositories/${repositoryId}/revisions/${first!.id}/restore`,
+      { method: "POST", headers: headers() },
+    );
+    expect(restore.status).toBe(409);
+    expect(await restore.json()).toMatchObject({
+      error: "analysis_already_running",
+    });
+    expect(store.listGraphRevisions(repositoryId)).toHaveLength(2);
+
+    await fetch(`${baseUrl}/v1/analysis-jobs/${accepted.id}`, {
+      method: "DELETE",
+      headers: headers(),
+    });
+  });
+
   it("restores interrupted jobs as retryable failures after agent restart", async () => {
     const store = openGraphStore(":memory:");
     store.saveAnalysisJob({

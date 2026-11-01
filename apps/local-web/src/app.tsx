@@ -19,15 +19,19 @@ import {
   checkSourceFreshness,
   checkAgent,
   createIntendedComponent,
+  exportGraphHistory,
   getArchitectureRuleEvaluation,
   getAnalysisJob,
   getGraph,
   installArchitectureTemplate,
   listArchitectureTemplates,
+  listGraphRevisions,
   mapEntityToIntendedComponent,
   normalizeAgentUrl,
   removeEntityMapping,
+  restoreGraphRevision,
   startAnalysisJob,
+  type GraphRevisionSummary,
   type SourceFreshness,
   type AnalysisResult,
 } from "./agent/client.js";
@@ -87,8 +91,17 @@ export function App() {
     | "template-install"
     | "rules-load"
     | "source-check"
+    | "history-load"
+    | "history-restore"
+    | "history-export"
     | null
   >(null);
+  // History is tied to the graph object it was loaded for, so any later graph
+  // change hides it instead of showing a stale list.
+  const [history, setHistory] = useState<{
+    snapshot: GraphSnapshot;
+    revisions: GraphRevisionSummary[];
+  } | null>(null);
   const isBusy = busyAction !== null;
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,7 +187,9 @@ export function App() {
     if (!snapshot || !selectedEntity?.source) return;
     const rootPath = snapshotRootPath.trim() || repositoryPath.trim();
     if (!rootPath) {
-      setError("Enter the repository folder path to verify this source location.");
+      setError(
+        "Enter the repository folder path to verify this source location.",
+      );
       return;
     }
     setBusyAction("source-check");
@@ -210,6 +225,93 @@ export function App() {
       setNotice("Connected to the local agent.");
     } catch (reason) {
       setIsConnected(false);
+      setError(errorMessage(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function loadHistory(): Promise<void> {
+    if (!snapshot) return;
+    setBusyAction("history-load");
+    setError(null);
+    setNotice(null);
+    try {
+      const revisions = await listGraphRevisions(
+        normalizeAgentUrl(agentUrl),
+        token,
+        snapshot.repositoryId,
+      );
+      setHistory({ snapshot, revisions });
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function restoreRevision(
+    revision: GraphRevisionSummary,
+  ): Promise<void> {
+    if (!snapshot) return;
+    setBusyAction("history-restore");
+    setError(null);
+    setNotice(null);
+    try {
+      const baseUrl = normalizeAgentUrl(agentUrl);
+      const result = await restoreGraphRevision(
+        baseUrl,
+        token,
+        snapshot.repositoryId,
+        revision.id,
+      );
+      const revisions = await listGraphRevisions(
+        baseUrl,
+        token,
+        snapshot.repositoryId,
+      );
+      setSnapshot(result.graph);
+      setHistory({ snapshot: result.graph, revisions });
+      setSourceFreshness(null);
+      setSourceMatches(null);
+      setAnalysis(null);
+      setRuleEvaluation(null);
+      setSelectedEntityId(null);
+      setNotice(
+        result.status === "restored"
+          ? `Restored revision ${revision.sequence} as new revision ${result.revision.sequence}. Earlier history is kept.`
+          : `Revision ${revision.sequence} already matches the current graph; nothing changed.`,
+      );
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function downloadHistory(): Promise<void> {
+    if (!snapshot) return;
+    setBusyAction("history-export");
+    setError(null);
+    setNotice(null);
+    try {
+      const text = await exportGraphHistory(
+        normalizeAgentUrl(agentUrl),
+        token,
+        snapshot.repositoryId,
+      );
+      const url = URL.createObjectURL(
+        new Blob([text], { type: "application/json" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `codifier-history-${snapshot.repositoryId}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setNotice(
+        "History exported. It contains graph metadata and source locations, not file contents.",
+      );
+    } catch (reason) {
       setError(errorMessage(reason));
     } finally {
       setBusyAction(null);
@@ -961,6 +1063,18 @@ export function App() {
               )}
               {analysis && <CoverageCard analysis={analysis} />}
               {snapshot && <GitContextCard context={snapshot.gitContext} />}
+              {snapshot && isConnected && (
+                <RevisionHistoryCard
+                  busyAction={busyAction}
+                  isBusy={isBusy}
+                  onExport={() => void downloadHistory()}
+                  onLoad={() => void loadHistory()}
+                  onRestore={(revision) => void restoreRevision(revision)}
+                  revisions={
+                    history?.snapshot === snapshot ? history.revisions : null
+                  }
+                />
+              )}
               <p className="px-1 text-[11px] leading-5 text-muted">
                 Analysis runs on your machine. Unsupported files and diagnostics
                 are shown rather than silently treated as complete.
@@ -2144,6 +2258,145 @@ function GitContextCard({ context }: { context: GitContext | undefined }) {
           Source ranges describe the analyzed working tree; the commit above is
           its HEAD baseline.
         </p>
+      )}
+    </section>
+  );
+}
+
+function RevisionHistoryCard({
+  busyAction,
+  isBusy,
+  onExport,
+  onLoad,
+  onRestore,
+  revisions,
+}: {
+  busyAction: string | null;
+  isBusy: boolean;
+  onExport: () => void;
+  onLoad: () => void;
+  onRestore: (revision: GraphRevisionSummary) => void;
+  revisions: GraphRevisionSummary[] | null;
+}) {
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const current = revisions?.at(-1);
+  const ordered = revisions ? [...revisions].reverse() : [];
+  const sequenceOf = (id: string | null) =>
+    revisions?.find((revision) => revision.id === id)?.sequence;
+
+  return (
+    <section
+      aria-label="Revision history"
+      className="rounded-2xl border border-line bg-white p-5 shadow-card"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-forest">
+            History
+          </p>
+          <h2 className="mt-1 text-base font-semibold tracking-[-0.03em]">
+            Graph revisions
+          </h2>
+        </div>
+        <button
+          className={secondaryButtonClass}
+          disabled={isBusy}
+          onClick={onExport}
+          type="button"
+        >
+          {busyAction === "history-export" ? "Exporting…" : "Export"}
+        </button>
+      </div>
+      {revisions === null ? (
+        <button
+          className={`${secondaryButtonClass} mt-3 w-full`}
+          disabled={isBusy}
+          onClick={onLoad}
+          type="button"
+        >
+          {busyAction === "history-load" ? "Loading…" : "Show revision history"}
+        </button>
+      ) : (
+        <>
+          <p className="mt-2 text-[11px] leading-5 text-muted">
+            Restoring saves an earlier graph as a new revision. Nothing is
+            deleted.
+          </p>
+          <ol className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+            {ordered.map((revision) => {
+              const isCurrent = revision.id === current?.id;
+              const restoredFrom = sequenceOf(revision.restoredFromRevisionId);
+              const { added, changed, removed } = revision.changeCounts;
+              return (
+                <li
+                  className="rounded-xl border border-line bg-canvas p-3 text-[11px]"
+                  key={revision.id}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-ink">
+                      Revision {revision.sequence}
+                      {isCurrent && (
+                        <span className="ml-2 rounded-full bg-mist px-2 py-0.5 text-[10px] font-medium text-forest">
+                          current
+                        </span>
+                      )}
+                    </span>
+                    <time
+                      className="text-muted"
+                      dateTime={new Date(revision.createdAt).toISOString()}
+                    >
+                      {new Date(revision.createdAt).toLocaleString()}
+                    </time>
+                  </div>
+                  <p className="mt-1 text-muted">
+                    {restoredFrom !== undefined
+                      ? `Restored from revision ${restoredFrom}. `
+                      : ""}
+                    {added} added, {changed} changed, {removed} removed
+                    {revision.sourceRevision
+                      ? ` · source ${revision.sourceRevision.slice(0, 12)}`
+                      : ""}
+                  </p>
+                  {!isCurrent &&
+                    (pendingId === revision.id ? (
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          className={primaryButtonClass}
+                          disabled={isBusy}
+                          onClick={() => {
+                            setPendingId(null);
+                            onRestore(revision);
+                          }}
+                          type="button"
+                        >
+                          Confirm restore of revision {revision.sequence}
+                        </button>
+                        <button
+                          className={secondaryButtonClass}
+                          disabled={isBusy}
+                          onClick={() => setPendingId(null)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        className={`${secondaryButtonClass} mt-2`}
+                        disabled={isBusy}
+                        onClick={() => setPendingId(revision.id)}
+                        type="button"
+                      >
+                        {busyAction === "history-restore"
+                          ? "Restoring…"
+                          : "Restore this revision"}
+                      </button>
+                    ))}
+                </li>
+              );
+            })}
+          </ol>
+        </>
       )}
     </section>
   );

@@ -52,6 +52,20 @@ export interface GraphRestoreResult {
   revision: GraphRevisionRecord;
 }
 
+/**
+ * Portable, verified copy of a repository's revision history. Contains graph
+ * metadata, evidence, and source locators, never source file contents or
+ * analysis job records.
+ */
+export interface GraphHistoryExport {
+  format: "codifier.graph-history";
+  formatVersion: 1;
+  repositoryId: string;
+  currentRevisionId: string | null;
+  exportedAt: number;
+  revisions: Array<GraphRevisionRecord & { snapshot: GraphSnapshot }>;
+}
+
 export interface GraphRevisionChangeSummary {
   entities: { added: string[]; changed: string[]; removed: string[] };
   relationships: { added: string[]; changed: string[]; removed: string[] };
@@ -73,6 +87,12 @@ export interface GraphStore {
     repositoryId: string,
     revisionId: string,
   ): GraphRestoreResult | null;
+  /**
+   * Exports every revision with its re-verified snapshot. Returns null for an
+   * unknown repository; throws StorageCorruptionError if any revision fails
+   * verification, so a partial export is never produced.
+   */
+  exportGraphHistory(repositoryId: string): GraphHistoryExport | null;
   getAnalysisJob(jobId: string): PersistedAnalysisJob | null;
   listAnalysisJobs(limit?: number): PersistedAnalysisJob[];
   saveAnalysisJob(job: Omit<PersistedAnalysisJob, "updatedAt">): void;
@@ -329,6 +349,38 @@ function createGraphStore(
         );
       }
       return { status: created ? "restored" : "unchanged", revision };
+    },
+
+    exportGraphHistory(repositoryId) {
+      return db.transaction(() => {
+        const repository = db
+          .select({
+            currentGraphRevisionId: repositories.currentGraphRevisionId,
+          })
+          .from(repositories)
+          .where(eq(repositories.id, repositoryId))
+          .get();
+        if (!repository) return null;
+        const revisions = store
+          .listGraphRevisions(repositoryId)
+          .map((record) => {
+            const snapshot = store.getGraphRevision(repositoryId, record.id);
+            if (!snapshot) {
+              throw new StorageCorruptionError(
+                "Graph revision disappeared while exporting history.",
+              );
+            }
+            return { ...record, snapshot };
+          });
+        return {
+          format: "codifier.graph-history" as const,
+          formatVersion: 1 as const,
+          repositoryId,
+          currentRevisionId: repository.currentGraphRevisionId,
+          exportedAt: Date.now(),
+          revisions,
+        };
+      });
     },
 
     replaceGraph(snapshot, committedJob) {

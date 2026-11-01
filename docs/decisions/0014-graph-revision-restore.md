@@ -24,4 +24,4 @@ The local agent exposes this as authenticated `POST /v1/repositories/<repository
 - History stays append-only and auditable; a restore is distinguishable from an analysis commit.
 - A restored graph keeps the old entity UUIDs, so later analysis reconciles against it like any other baseline.
 - Storage tests cover restore ordering across reopen, no-op restore, foreign/unknown revision IDs, tampered history, a mid-transaction constraint failure that rolls back the revision and current graph, and duplicate job retries.
-- Not yet implemented: restore controls in the web or VS Code clients, history export, and retention/pruning policy.
+- Not yet implemented: a VS Code restore control and a retention/pruning policy. The web explorer restore control and history export ([ADR 0015](0015-graph-history-export.md)) were added afterwards.

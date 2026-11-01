@@ -39,6 +39,8 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0014: Graph revision restore](0014-graph-revision-restore.md) records that restoring history commits a new, verified revision and never rewrites earlier ones.
 
+[0015: Graph history export](0015-graph-history-export.md) records the verified JSON export format and what it excludes.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?
