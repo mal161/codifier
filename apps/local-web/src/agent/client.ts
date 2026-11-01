@@ -1,12 +1,14 @@
 import {
-  architectureRuleEvaluationSchema,
+  reviewedArchitectureRuleEvaluationSchema,
+  ruleExceptionSchema,
   architectureTemplateCatalogSchema,
   analysisJobSchema,
   graphSnapshotSchema,
   installArchitectureTemplateRequestSchema,
   sourceFreshnessResultSchema,
   type ArchitectureTemplate,
-  type ArchitectureRuleEvaluation,
+  type ReviewedArchitectureRuleEvaluation,
+  type RuleException,
   type AnalysisJob,
   type AnalysisJobResult,
 } from "@codifier/contracts";
@@ -160,7 +162,7 @@ export async function getArchitectureRuleEvaluation(
   token: string,
   repositoryId: string,
   fetcher: typeof fetch = fetch,
-): Promise<ArchitectureRuleEvaluation> {
+): Promise<ReviewedArchitectureRuleEvaluation> {
   if (!isRepositoryId(repositoryId)) {
     throw new Error("Enter a valid repository UUID.");
   }
@@ -171,9 +173,77 @@ export async function getArchitectureRuleEvaluation(
     {},
     fetcher,
   );
-  const parsed = architectureRuleEvaluationSchema.safeParse(response);
+  const parsed = reviewedArchitectureRuleEvaluationSchema.safeParse(response);
   if (!parsed.success) {
     throw new Error("The agent returned invalid architecture rule findings.");
+  }
+  return parsed.data;
+}
+
+export async function recordRuleException(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  input: {
+    findingKey: string;
+    author: string;
+    rationale: string;
+    expiresAt: number | null;
+  },
+  fetcher: typeof fetch = fetch,
+): Promise<RuleException> {
+  if (!isRepositoryId(repositoryId)) {
+    throw new Error("Enter a valid repository UUID.");
+  }
+  if (!input.author.trim() || !input.rationale.trim()) {
+    throw new Error("Enter your name and a rationale for the exception.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/rule-exceptions`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    fetcher,
+  );
+  return parseRuleException(response);
+}
+
+export async function revokeRuleException(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  exceptionId: string,
+  input: { revokedBy: string; reason: string },
+  fetcher: typeof fetch = fetch,
+): Promise<RuleException> {
+  if (![repositoryId, exceptionId].every(isRepositoryId)) {
+    throw new Error("Repository and exception IDs must be valid UUIDs.");
+  }
+  if (!input.revokedBy.trim() || !input.reason.trim()) {
+    throw new Error("Enter your name and a reason for revoking the exception.");
+  }
+  const response = await request(
+    baseUrl,
+    token,
+    `/v1/repositories/${encodeURIComponent(repositoryId)}/rule-exceptions/${encodeURIComponent(exceptionId)}/revoke`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    fetcher,
+  );
+  return parseRuleException(response);
+}
+
+function parseRuleException(response: unknown): RuleException {
+  const parsed = ruleExceptionSchema.safeParse(response);
+  if (!parsed.success) {
+    throw new Error("The agent returned an invalid rule exception.");
   }
   return parsed.data;
 }

@@ -15,7 +15,11 @@ Node `>=24 <25` and pnpm (see root `package.json`). Playwright is **not** a proj
 mkdir -p "$TEMP/codifier-pw" && cd "$TEMP/codifier-pw" && npm init -y >/dev/null && npm i playwright-core@1.49.1 --no-audit --no-fund
 ```
 
-On Windows it drives the preinstalled Edge (`channel: "msedge"`), so no browser download is needed.
+On Windows it drives the preinstalled Edge (`channel: "msedge"`), so no browser download is needed. The accessibility flow also needs axe-core in the same directory:
+
+```bash
+cd "$TEMP/codifier-pw" && npm i axe-core@4.10.2 --no-audit --no-fund
+```
 
 ## Setup
 
@@ -35,19 +39,22 @@ It prints one line per step and ends with `PASS - screenshots in <dir>` (exit 0)
 
 1. Starts the agent on `127.0.0.1:4198`, with `CODIFIER_AGENT_ALLOWED_ORIGINS=http://127.0.0.1:5173` and a random token, then starts Vite on `127.0.0.1:5173`.
 2. Seeds the graph through the API: `POST /v1/analyze` on `fixtures/golden-repositories/react-express-workspace`, then adds one intended component, giving 2 revisions.
-3. In the browser it connects, loads the saved graph, opens **Graph revisions**, restores revision 1 with the confirm step, and exports the history.
-4. Writes `1-loaded.png`, `2-confirm.png`, `3-restored.png` and the exported `codifier-history-<uuid>.json` to `--out`.
+3. In the browser it connects and loads the saved graph. On **Rules** it records an exception for the unmapped-component finding, checks it shows as accepted, and revokes it. On **Explore** it opens **Graph revisions**, restores revision 1 with the confirm step, and exports the history.
+4. Writes `1-loaded.png`, `2-confirm.png`, `3-restored.png`, `4-exception-form.png`, `5-exception-accepted.png`, `6-exception-revoked.png` and the exported `codifier-history-<uuid>.json` to `--out`.
 5. Fails if the page logs any console error.
 
 | option / env | effect |
 |---|---|
 | `--out <dir>` | artifact directory (default: a new temp dir) |
 | `--agent-port <n>` | agent port (default 4198; avoids a developer agent on 4141) |
+| `--flow <all, history, exceptions, a11y>` | which browser flows to run (default `all`; exceptions run first because the restore removes the seeded component). `a11y` runs the WCAG 2.2 AA audit instead (see below) |
 | `--keep` | after PASS, leave both servers running and print the token and repository UUID; Ctrl+C stops them |
 | `HEADED=1` | show the browser window |
 | `BROWSER_CHANNEL` | Playwright channel; default `msedge` on Windows, else `chromium` |
 
-To check a different UI change, copy `driveHistoryFlow` and swap in the new steps. Keep the launch, seed and stop functions as they are. Look at the screenshots; a PASS only proves the asserted text appeared.
+To check a different UI change, add a flow next to `driveExceptionFlow` and call it from `driveHistoryFlow`.
+
+`--flow a11y` audits six UI states (explorer disconnected and loaded, history, relationship map, rules with the exception form open, marketplace) with axe-core WCAG 2.0–2.2 A/AA rules plus label-in-name, and scripted checks for Tab order, focus indicators, focus obscured by fixed content at 1440 px and 320 px, 24 px targets, and 320 px reflow. It runs with reduced motion so scroll positions are measured after scrolling, and writes `a11y-report.json` and `a11y-*.png` to `--out`. Record results in `docs/ACCESSIBILITY_REVIEW.md`. Keep the launch, seed and stop functions as they are. Look at the screenshots; a PASS only proves the asserted text appeared.
 
 To smoke-test the agent API without a browser, start it by hand and use the CLI (it reads `CODIFIER_AGENT_URL` and `CODIFIER_AGENT_TOKEN`):
 
@@ -82,6 +89,7 @@ This runs lint, typecheck and test through Turbo: 21 tasks across 7 packages, al
 - **Restoring a revision identical to the current graph is a no-op.** It shows "Revision N already matches the current graph; nothing changed", not "Restored ...". Pick a revision that differs; the driver restores revision 1 after adding a component.
 - **`pnpm start -- <cmd> --opt`** works only from commit `1734b0d` on. Older CLIs read the forwarded `--` as the end of options.
 - **Playwright `TargetClosedError` after a blob download.** playwright-core 1.49 leaves an internal navigation promise pending and rejects it on close, which crashes the process before any cleanup. The driver navigates to `about:blank` after the download and ignores only that error.
+- **Accessibility audit artifacts look like real failures.** Smooth scrolling makes focus-position probes read off-screen coordinates, and a disabled button fading back in (`transition` + `disabled:opacity-45`) can be sampled mid-fade as low contrast. The a11y flow emulates reduced motion and the app honours it; if you see focus "obscured" by content far down the page, check `scrollY` in the report before fixing code.
 - **Git context reads "Uncommitted changes"** whenever this repository's working tree is dirty, because the fixture lives inside it. That is expected.
 
 ## Troubleshooting

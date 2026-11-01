@@ -8,7 +8,7 @@ import {
 } from "@codifier/domain";
 import { createHash, randomUUID } from "node:crypto";
 import BetterSqlite3 from "better-sqlite3";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import {
   drizzle,
   type BetterSQLite3Database,
@@ -17,6 +17,7 @@ import { applyMigrations } from "./migrations.js";
 import * as schema from "./schema.js";
 import {
   analysisJobs,
+  architectureRuleExceptions,
   entities,
   evidence as evidenceTable,
   graphRevisions,
@@ -66,6 +67,47 @@ export interface GraphHistoryExport {
   revisions: Array<GraphRevisionRecord & { snapshot: GraphSnapshot }>;
 }
 
+/**
+ * A developer-authored, append-only decision to accept one rule finding.
+ * Records are never edited or deleted; revoking sets the revoke fields once.
+ */
+export interface RuleExceptionRecord {
+  id: string;
+  repositoryId: string;
+  findingKey: string;
+  ruleId: string;
+  entityIds: string[];
+  rationale: string;
+  author: string;
+  createdAt: number;
+  expiresAt: number | null;
+  revokedAt: number | null;
+  revokedBy: string | null;
+  revokeReason: string | null;
+}
+
+export type NewRuleException = Pick<
+  RuleExceptionRecord,
+  | "repositoryId"
+  | "findingKey"
+  | "ruleId"
+  | "entityIds"
+  | "rationale"
+  | "author"
+  | "expiresAt"
+>;
+
+export class RuleExceptionConflictError extends Error {
+  constructor(
+    public readonly code:
+      "repository_not_found" | "active_exception_exists" | "already_revoked",
+    message: string,
+  ) {
+    super(message);
+    this.name = "RuleExceptionConflictError";
+  }
+}
+
 export interface GraphRevisionChangeSummary {
   entities: { added: string[]; changed: string[]; removed: string[] };
   relationships: { added: string[]; changed: string[]; removed: string[] };
@@ -93,6 +135,15 @@ export interface GraphStore {
    * verification, so a partial export is never produced.
    */
   exportGraphHistory(repositoryId: string): GraphHistoryExport | null;
+  listRuleExceptions(repositoryId: string): RuleExceptionRecord[];
+  /** Throws RuleExceptionConflictError when an active exception already exists. */
+  createRuleException(exception: NewRuleException): RuleExceptionRecord;
+  /** Returns null when unknown; throws RuleExceptionConflictError if already revoked. */
+  revokeRuleException(
+    repositoryId: string,
+    exceptionId: string,
+    revocation: { revokedBy: string; reason: string },
+  ): RuleExceptionRecord | null;
   getAnalysisJob(jobId: string): PersistedAnalysisJob | null;
   listAnalysisJobs(limit?: number): PersistedAnalysisJob[];
   saveAnalysisJob(job: Omit<PersistedAnalysisJob, "updatedAt">): void;
@@ -383,6 +434,112 @@ function createGraphStore(
       });
     },
 
+    listRuleExceptions(repositoryId) {
+      return db
+        .select()
+        .from(architectureRuleExceptions)
+        .where(eq(architectureRuleExceptions.repositoryId, repositoryId))
+        .orderBy(
+          asc(architectureRuleExceptions.createdAt),
+          asc(architectureRuleExceptions.id),
+        )
+        .all()
+        .map(toRuleExceptionRecord);
+    },
+
+    createRuleException(exception) {
+      return db.transaction((transaction) => {
+        const repository = transaction
+          .select({ id: repositories.id })
+          .from(repositories)
+          .where(eq(repositories.id, exception.repositoryId))
+          .get();
+        if (!repository) {
+          throw new RuleExceptionConflictError(
+            "repository_not_found",
+            "No saved graph exists for this repository.",
+          );
+        }
+        const active = transaction
+          .select({ id: architectureRuleExceptions.id })
+          .from(architectureRuleExceptions)
+          .where(
+            and(
+              eq(
+                architectureRuleExceptions.repositoryId,
+                exception.repositoryId,
+              ),
+              eq(architectureRuleExceptions.findingKey, exception.findingKey),
+              isNull(architectureRuleExceptions.revokedAt),
+            ),
+          )
+          .get();
+        if (active) {
+          throw new RuleExceptionConflictError(
+            "active_exception_exists",
+            "This finding already has an active exception; revoke it before recording another.",
+          );
+        }
+        const row = {
+          id: randomUUID(),
+          repositoryId: exception.repositoryId,
+          findingKey: exception.findingKey,
+          ruleId: exception.ruleId,
+          entityIdsJson: JSON.stringify([...exception.entityIds].sort()),
+          rationale: exception.rationale,
+          author: exception.author,
+          createdAt: new Date(),
+          expiresAt:
+            exception.expiresAt === null ? null : new Date(exception.expiresAt),
+          revokedAt: null,
+          revokedBy: null,
+          revokeReason: null,
+        };
+        transaction.insert(architectureRuleExceptions).values(row).run();
+        return toRuleExceptionRecord(row);
+      });
+    },
+
+    revokeRuleException(repositoryId, exceptionId, revocation) {
+      return db.transaction((transaction) => {
+        const existing = transaction
+          .select()
+          .from(architectureRuleExceptions)
+          .where(
+            and(
+              eq(architectureRuleExceptions.repositoryId, repositoryId),
+              eq(architectureRuleExceptions.id, exceptionId),
+            ),
+          )
+          .get();
+        if (!existing) return null;
+        if (existing.revokedAt) {
+          throw new RuleExceptionConflictError(
+            "already_revoked",
+            "This exception was already revoked.",
+          );
+        }
+        const revokedAt = new Date(
+          Math.max(Date.now(), existing.createdAt.getTime()),
+        );
+        transaction
+          .update(architectureRuleExceptions)
+          .set({
+            revokedAt,
+            revokedBy: revocation.revokedBy,
+            revokeReason: revocation.reason,
+          })
+          .where(eq(architectureRuleExceptions.id, exceptionId))
+          .run();
+        return toRuleExceptionRecord({
+          ...existing,
+          revokedAt,
+          revokedBy: revocation.revokedBy,
+          revokeReason: revocation.reason,
+        });
+      });
+    },
+
     replaceGraph(snapshot, committedJob) {
       commitSnapshot(snapshot, committedJob ? { committedJob } : {});
     },
@@ -617,6 +774,25 @@ function createGraphStore(
   }
 
   return store;
+}
+
+function toRuleExceptionRecord(
+  row: typeof architectureRuleExceptions.$inferSelect,
+): RuleExceptionRecord {
+  return {
+    id: row.id,
+    repositoryId: row.repositoryId,
+    findingKey: row.findingKey,
+    ruleId: row.ruleId,
+    entityIds: parseJson<string[]>(row.entityIdsJson, "exception entity IDs"),
+    rationale: row.rationale,
+    author: row.author,
+    createdAt: row.createdAt.getTime(),
+    expiresAt: row.expiresAt?.getTime() ?? null,
+    revokedAt: row.revokedAt?.getTime() ?? null,
+    revokedBy: row.revokedBy,
+    revokeReason: row.revokeReason,
+  };
 }
 
 function parseJson<T>(value: string, field: string): T {

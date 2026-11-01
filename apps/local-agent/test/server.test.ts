@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openGraphStore } from "@codifier/storage";
 import {
   analysisJobSchema,
-  architectureRuleEvaluationSchema,
+  reviewedArchitectureRuleEvaluationSchema,
+  ruleExceptionListSchema,
+  ruleExceptionSchema,
   type AnalysisJob,
 } from "@codifier/contracts";
 import { createAgentServer } from "../src/server.js";
@@ -552,13 +554,13 @@ describe("local agent API", () => {
       { headers: headers() },
     );
     expect(response.status).toBe(200);
-    const evaluation = architectureRuleEvaluationSchema.parse(
+    const evaluation = reviewedArchitectureRuleEvaluationSchema.parse(
       await response.json(),
     );
     expect(evaluation).toMatchObject({
       repositoryId,
       revision: graph.revision,
-      ruleSetVersion: "1.1.0",
+      ruleSetVersion: "1.2.0",
     });
     expect(evaluation.findings).toContainEqual(
       expect.objectContaining({
@@ -573,6 +575,180 @@ describe("local agent API", () => {
     expect(evaluation.findings).not.toContainEqual(
       expect.objectContaining({ ruleId: "unmapped-intended-component" }),
     );
+  });
+
+  it("records, applies, expires, and revokes rule exceptions without changing the graph", async () => {
+    const { baseUrl } = await startTestServer();
+    const store = stores.at(-1)!;
+    const componentId = "c4a1d2e3-7f6a-4a5b-8c9d-0123456789ab";
+    const original = createSnapshot();
+    const graph = {
+      ...original,
+      entities: [
+        ...original.entities,
+        {
+          ...original.entities[0]!,
+          id: componentId,
+          kind: "component" as const,
+          name: "Billing",
+          state: "intended" as const,
+        },
+      ],
+    };
+    store.replaceGraph(graph);
+    const rulesUrl = `${baseUrl}/v1/repositories/${repositoryId}/architecture-rules`;
+    const exceptionsUrl = `${baseUrl}/v1/repositories/${repositoryId}/rule-exceptions`;
+    const post = (url: string, body: unknown) =>
+      fetch(url, {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const evaluate = async () =>
+      reviewedArchitectureRuleEvaluationSchema.parse(
+        await (await fetch(rulesUrl, { headers: headers() })).json(),
+      );
+
+    const before = await evaluate();
+    const finding = before.findings.find(
+      (candidate) => candidate.ruleId === "unmapped-intended-component",
+    )!;
+    expect(finding.findingKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(finding.exception).toBeNull();
+
+    expect(
+      (
+        await post(exceptionsUrl, {
+          findingKey: "f".repeat(64),
+          author: "A",
+          rationale: "R",
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await post(exceptionsUrl, {
+          findingKey: finding.findingKey,
+          author: "A",
+          rationale: "R",
+          expiresAt: Date.now() - 1,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post(exceptionsUrl, {
+          findingKey: finding.findingKey,
+          author: " ",
+          rationale: "R",
+        })
+      ).status,
+    ).toBe(400);
+
+    const created = await post(exceptionsUrl, {
+      findingKey: finding.findingKey,
+      author: "  Dana  ",
+      rationale: "Billing is scheduled for the next milestone.",
+    });
+    expect(created.status).toBe(201);
+    const exception = ruleExceptionSchema.parse(await created.json());
+    expect(exception).toMatchObject({
+      author: "Dana",
+      ruleId: "unmapped-intended-component",
+      entityIds: [componentId],
+      status: "active",
+      matchesCurrentFinding: true,
+      revokedAt: null,
+    });
+    expect(
+      (
+        await post(exceptionsUrl, {
+          findingKey: finding.findingKey,
+          author: "B",
+          rationale: "again",
+        })
+      ).status,
+    ).toBe(409);
+
+    const excepted = await evaluate();
+    expect(
+      excepted.findings.find(
+        (candidate) => candidate.findingKey === finding.findingKey,
+      ),
+    ).toMatchObject({
+      ruleId: "unmapped-intended-component",
+      exception: { id: exception.id, status: "active", author: "Dana" },
+    });
+    // The finding is still reported, and the graph is untouched.
+    expect(excepted.findings).toHaveLength(before.findings.length);
+    expect(store.getGraph(repositoryId)).toEqual(graph);
+    expect(store.listGraphRevisions(repositoryId)).toHaveLength(1);
+
+    const revokeUrl = `${exceptionsUrl}/${exception.id}/revoke`;
+    expect((await post(revokeUrl, { revokedBy: "Lee" })).status).toBe(400);
+    const revoked = await post(revokeUrl, {
+      revokedBy: "Lee",
+      reason: "Billing was mapped instead.",
+    });
+    expect(revoked.status).toBe(200);
+    expect(ruleExceptionSchema.parse(await revoked.json())).toMatchObject({
+      status: "revoked",
+      revokedBy: "Lee",
+      rationale: "Billing is scheduled for the next milestone.",
+    });
+    expect(
+      (await post(revokeUrl, { revokedBy: "Lee", reason: "again" })).status,
+    ).toBe(409);
+    expect(
+      (await evaluate()).findings.find(
+        (candidate) => candidate.findingKey === finding.findingKey,
+      )!.exception,
+    ).toBeNull();
+
+    // An exception that has passed its expiry is reported, not applied.
+    const expiring = ruleExceptionSchema.parse(
+      await (
+        await post(exceptionsUrl, {
+          findingKey: finding.findingKey,
+          author: "Dana",
+          rationale: "Short-lived acceptance.",
+          expiresAt: Date.now() + 200,
+        })
+      ).json(),
+    );
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+    expect(
+      (await evaluate()).findings.find(
+        (candidate) => candidate.findingKey === finding.findingKey,
+      )!.exception,
+    ).toMatchObject({ id: expiring.id, status: "expired" });
+
+    // Mapping code to the component removes the finding; the record remains.
+    store.replaceGraph({
+      ...graph,
+      relationships: [
+        {
+          id: "d4a1d2e3-7f6a-4a5b-8c9d-0123456789ab",
+          sourceEntityId: componentId,
+          targetEntityId: entityId,
+          type: "MAPS_TO",
+          state: "intended" as const,
+          evidenceIds: [evidenceId],
+        },
+      ],
+    });
+    const listed = ruleExceptionListSchema.parse(
+      await (await fetch(exceptionsUrl, { headers: headers() })).json(),
+    );
+    expect(
+      listed.exceptions.map(({ status, matchesCurrentFinding }) => ({
+        status,
+        matchesCurrentFinding,
+      })),
+    ).toEqual([
+      { status: "revoked", matchesCurrentFinding: false },
+      { status: "expired", matchesCurrentFinding: false },
+    ]);
   });
 
   it("validates the architecture rule repository and requires a saved graph", async () => {

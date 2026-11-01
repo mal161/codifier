@@ -43,6 +43,10 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0016: In-memory parse cache](0016-in-memory-parse-cache.md) records reuse of unchanged syntax trees with whole-inventory re-resolution, and why parse results are not persisted.
 
+[0017: Auditable rule exceptions](0017-auditable-rule-exceptions.md) records append-only, self-attested exception decisions keyed by stable finding identity and kept outside the graph.
+
+[0018: Rule set 1.2.0](0018-rule-set-1-2-drift-conflicts-and-locations.md) records intent conflict checks, source locations on every finding, and the linear-time evaluation.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?

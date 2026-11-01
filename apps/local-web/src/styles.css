@@ -6,8 +6,10 @@
   --color-forest-dark: #1d4237;
   --color-ink: #1d2421;
   --color-line: #e6e9e4;
+  /* WCAG 1.4.11: form-field boundaries need 3:1; >= 3.07:1 on white and canvas. */
+  --color-field: #868f89;
   --color-mist: #edf3ee;
-  --color-muted: #78817b;
+  --color-muted: #5e6761;
   --color-good: #55a878;
   --font-sans:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -17,7 +19,11 @@
 
 @layer base {
   html {
-    @apply min-w-80 scroll-smooth;
+    /* Smooth scrolling only for people who have not asked for reduced motion. */
+    @apply min-w-80 motion-safe:scroll-smooth;
+    /* WCAG 2.4.11 (technique C43): keep focused controls above the fixed
+       status message when the browser scrolls them into view. */
+    scroll-padding-bottom: 8rem;
   }
 
   body {
@@ -35,5 +41,25 @@
 
   ::selection {
     @apply bg-forest/20 text-ink;
+  }
+}
+
+/* WCAG 2.5.8: give the graph library's attribution link a 24px target. */
+.react-flow__attribution a {
+  display: inline-block;
+  padding-block: 5px;
+  /* WCAG 1.4.3: the library default #999 is 2.8:1 on white. */
+  color: var(--color-muted);
+}
+
+/* Honour the operating-system reduced-motion preference for every
+   transition and animation, including third-party components. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

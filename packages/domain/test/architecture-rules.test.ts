@@ -73,7 +73,7 @@ describe("evaluateArchitectureRules", () => {
     expect(result).toMatchObject({
       repositoryId,
       revision: "a1b2c3d",
-      ruleSetVersion: "1.1.0",
+      ruleSetVersion: "1.2.0",
     });
     expect(result.findings).toContainEqual(
       expect.objectContaining({

@@ -102,6 +102,34 @@ const migrations: Migration[] = [
         ADD COLUMN restored_from_revision_id TEXT REFERENCES graph_revisions(id)`,
     ],
   },
+  {
+    id: "0006_architecture_rule_exceptions",
+    statements: [
+      `CREATE TABLE architecture_rule_exceptions (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        finding_key TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        entity_ids_json TEXT NOT NULL CHECK (json_valid(entity_ids_json)),
+        rationale TEXT NOT NULL CHECK (length(rationale) > 0),
+        author TEXT NOT NULL CHECK (length(author) > 0),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER CHECK (expires_at IS NULL OR expires_at > created_at),
+        revoked_at INTEGER,
+        revoked_by TEXT,
+        revoke_reason TEXT,
+        CHECK (
+          (revoked_at IS NULL AND revoked_by IS NULL AND revoke_reason IS NULL) OR
+          (revoked_at IS NOT NULL AND length(revoked_by) > 0 AND length(revoke_reason) > 0)
+        )
+      )`,
+      `CREATE INDEX architecture_rule_exceptions_repository
+        ON architecture_rule_exceptions(repository_id, created_at)`,
+      `CREATE UNIQUE INDEX architecture_rule_exceptions_one_active
+        ON architecture_rule_exceptions(repository_id, finding_key)
+        WHERE revoked_at IS NULL`,
+    ],
+  },
 ];
 
 export function applyMigrations(database: BetterSqlite3.Database): void {

@@ -26,4 +26,4 @@ Saved source ranges can outlive the file revision they describe. Opening an unve
 
 - Source links require a local authenticated request and user-supplied repository root before opening.
 - The freshness result is point-in-time; subsequent file edits require another check.
-- Dependency drift review covers only the recorded relation types and explicitly mapped endpoints. Broader conflict checks and auditable exceptions remain future work.
+- Dependency drift review covers only the recorded relation types and explicitly mapped endpoints. Broader conflict checks remain future work; auditable exceptions were added in [ADR 0017](0017-auditable-rule-exceptions.md).

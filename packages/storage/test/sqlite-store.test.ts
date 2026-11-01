@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   GraphValidationError,
   openGraphStore,
+  RuleExceptionConflictError,
   StorageCorruptionError,
   type GraphStore,
 } from "../src/index.js";
@@ -460,5 +461,91 @@ describe("SQLite graph store", () => {
     expect(() => store.exportGraphHistory(repositoryId)).toThrow(
       StorageCorruptionError,
     );
+  });
+  it("records, lists, and revokes rule exceptions append-only", () => {
+    const databasePath = createTemporaryDatabasePath();
+    const store = openGraphStore(databasePath);
+    stores.push(store);
+    const exception = {
+      repositoryId,
+      findingKey: "a".repeat(64),
+      ruleId: "unmapped-intended-component",
+      entityIds: [entityId],
+      rationale: "Planned for next quarter.",
+      author: "Reviewer",
+      expiresAt: null,
+    };
+    expect(() => store.createRuleException(exception)).toThrow(
+      RuleExceptionConflictError,
+    );
+    store.replaceGraph(createSnapshot());
+
+    const created = store.createRuleException(exception);
+    expect(created).toMatchObject({ ...exception, revokedAt: null });
+    expect(() => store.createRuleException(exception)).toThrow(
+      "already has an active exception",
+    );
+
+    const revoked = store.revokeRuleException(repositoryId, created.id, {
+      revokedBy: "Lead",
+      reason: "Component was implemented.",
+    })!;
+    expect(revoked).toMatchObject({
+      id: created.id,
+      rationale: exception.rationale,
+      revokedBy: "Lead",
+      revokeReason: "Component was implemented.",
+    });
+    expect(revoked.revokedAt).toBeGreaterThanOrEqual(created.createdAt);
+    expect(() =>
+      store.revokeRuleException(repositoryId, created.id, {
+        revokedBy: "Lead",
+        reason: "again",
+      }),
+    ).toThrow("already revoked");
+    expect(
+      store.revokeRuleException(
+        "00000000-0000-4000-8000-000000000000",
+        created.id,
+        { revokedBy: "Lead", reason: "wrong repository" },
+      ),
+    ).toBeNull();
+
+    // A revoked exception does not block a new decision for the same finding.
+    const second = store.createRuleException({
+      ...exception,
+      expiresAt: Date.now() + 86_400_000,
+    });
+    store.close();
+    stores.pop();
+
+    const reopened = openGraphStore(databasePath);
+    stores.push(reopened);
+    expect(
+      reopened.listRuleExceptions(repositoryId).map(({ id }) => id),
+    ).toEqual([created.id, second.id]);
+    expect(reopened.listRuleExceptions(repositoryId)[0]!.revokedBy).toBe(
+      "Lead",
+    );
+  });
+
+  it("keeps exceptions when the graph is replaced or restored", () => {
+    const store = openGraphStore(createTemporaryDatabasePath());
+    stores.push(store);
+    store.replaceGraph(createSnapshot());
+    store.createRuleException({
+      repositoryId,
+      findingKey: "b".repeat(64),
+      ruleId: "dependency-cycle",
+      entityIds: [entityId],
+      rationale: "Accepted while migrating.",
+      author: "Reviewer",
+      expiresAt: null,
+    });
+    store.replaceGraph(createSnapshot("updated"));
+    const [first] = store.listGraphRevisions(repositoryId);
+    store.restoreGraphRevision(repositoryId, first!.id);
+
+    expect(store.listRuleExceptions(repositoryId)).toHaveLength(1);
   });
 });

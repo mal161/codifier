@@ -74,6 +74,7 @@ export interface GraphSnapshot {
 export {
   evaluateArchitectureRules,
   type ArchitectureRuleEvaluation,
+  maxFindingSourceLocations,
   type ArchitectureRuleFinding,
 } from "./architecture-rules.js";
 

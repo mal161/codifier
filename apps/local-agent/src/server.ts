@@ -1,11 +1,14 @@
 import websocket from "@fastify/websocket";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   GraphEntity,
   GraphRelationship,
   GraphSnapshot,
 } from "@codifier/domain";
-import { evaluateArchitectureRules } from "@codifier/domain";
+import {
+  evaluateArchitectureRules,
+  type ArchitectureRuleFinding,
+} from "@codifier/domain";
 import {
   analysisJobSchema,
   type AnalysisChangeSummary,
@@ -17,6 +20,8 @@ import {
   intendedComponentMappingRequestSchema,
   intendedComponentRequestSchema,
   sourceFreshnessRequestSchema,
+  ruleExceptionCreateRequestSchema,
+  ruleExceptionRevokeRequestSchema,
 } from "@codifier/contracts";
 import {
   analyzeRepository,
@@ -31,7 +36,12 @@ import { EventEmitter } from "node:events";
 import { timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import type { GraphStore, PersistedAnalysisJob } from "@codifier/storage";
+import {
+  RuleExceptionConflictError,
+  type GraphStore,
+  type PersistedAnalysisJob,
+  type RuleExceptionRecord,
+} from "@codifier/storage";
 import { readGitContext } from "./git-context.js";
 import {
   findArchitectureTemplate,
@@ -244,7 +254,180 @@ export function createAgentServer(
       if (!snapshot) {
         return reply.code(404).send({ error: "repository_not_found" });
       }
-      return evaluateArchitectureRules(snapshot);
+      const evaluation = evaluateArchitectureRules(snapshot);
+      const now = Date.now();
+      // At most one unrevoked exception exists per finding (storage index).
+      const exceptionByKey = new Map(
+        options.store
+          .listRuleExceptions(repositoryId)
+          .filter((exception) => exception.revokedAt === null)
+          .map((exception) => [exception.findingKey, exception]),
+      );
+      return {
+        ...evaluation,
+        findings: evaluation.findings.map((finding) => {
+          const findingKey = architectureFindingKey(finding);
+          const exception = exceptionByKey.get(findingKey);
+          return {
+            ...finding,
+            findingKey,
+            exception: exception
+              ? {
+                  id: exception.id,
+                  status: ruleExceptionStatus(exception, now) as
+                    "active" | "expired",
+                  author: exception.author,
+                  rationale: exception.rationale,
+                  createdAt: exception.createdAt,
+                  expiresAt: exception.expiresAt,
+                }
+              : null,
+          };
+        }),
+      };
+    },
+  );
+
+  app.get<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/rule-exceptions",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      const currentKeys = new Set(
+        evaluateArchitectureRules(snapshot).findings.map(
+          architectureFindingKey,
+        ),
+      );
+      const now = Date.now();
+      return {
+        exceptions: options.store
+          .listRuleExceptions(repositoryId)
+          .map((exception) =>
+            describeRuleException(exception, currentKeys, now),
+          ),
+      };
+    },
+  );
+
+  app.post<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/rule-exceptions",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      const parsed = ruleExceptionCreateRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_rule_exception",
+          issues: parsed.error.issues.map(({ path, message }) => ({
+            path,
+            message,
+          })),
+        });
+      }
+      const now = Date.now();
+      const expiresAt = parsed.data.expiresAt ?? null;
+      if (expiresAt !== null && expiresAt <= now) {
+        return reply.code(400).send({
+          error: "invalid_rule_exception",
+          message: "An exception's expiry must be in the future.",
+        });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      // Exceptions may only cover a finding the saved graph produces now.
+      const finding = evaluateArchitectureRules(snapshot).findings.find(
+        (candidate) =>
+          architectureFindingKey(candidate) === parsed.data.findingKey,
+      );
+      if (!finding) {
+        return reply.code(404).send({
+          error: "rule_finding_not_found",
+          message:
+            "That finding is not produced by the saved graph. Refresh the rule evaluation and try again.",
+        });
+      }
+      try {
+        const created = options.store.createRuleException({
+          repositoryId,
+          findingKey: parsed.data.findingKey,
+          ruleId: finding.ruleId,
+          entityIds: finding.entityIds,
+          rationale: parsed.data.rationale,
+          author: parsed.data.author,
+          expiresAt,
+        });
+        return reply
+          .code(201)
+          .send(
+            describeRuleException(created, new Set([created.findingKey]), now),
+          );
+      } catch (error) {
+        if (error instanceof RuleExceptionConflictError) {
+          return reply
+            .code(409)
+            .send({ error: error.code, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: RepositoryParams & { exceptionId: string } }>(
+    "/v1/repositories/:repositoryId/rule-exceptions/:exceptionId/revoke",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      const exceptionId = parseRepositoryId(request.params.exceptionId);
+      if (!repositoryId || !exceptionId) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_rule_exception_identifier" });
+      }
+      const parsed = ruleExceptionRevokeRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_rule_exception_revocation",
+          issues: parsed.error.issues.map(({ path, message }) => ({
+            path,
+            message,
+          })),
+        });
+      }
+      try {
+        const revoked = options.store.revokeRuleException(
+          repositoryId,
+          exceptionId,
+          parsed.data,
+        );
+        if (!revoked) {
+          return reply.code(404).send({ error: "rule_exception_not_found" });
+        }
+        const snapshot = options.store.getGraph(repositoryId);
+        const currentKeys = new Set(
+          snapshot
+            ? evaluateArchitectureRules(snapshot).findings.map(
+                architectureFindingKey,
+              )
+            : [],
+        );
+        return describeRuleException(revoked, currentKeys, Date.now());
+      } catch (error) {
+        if (error instanceof RuleExceptionConflictError) {
+          return reply
+            .code(409)
+            .send({ error: error.code, message: error.message });
+        }
+        throw error;
+      }
     },
   );
 
@@ -1290,6 +1473,43 @@ function hasValidBearerToken(
   const actual = Buffer.from(match[1]!, "utf8");
   const expected = Buffer.from(expectedToken, "utf8");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+/**
+ * Stable identity of a finding across evaluations: its rule plus the permanent
+ * UUIDs of the entities involved. Relationship IDs are excluded because import
+ * relationships are re-identified when statements move.
+ */
+export function architectureFindingKey(
+  finding: Pick<ArchitectureRuleFinding, "ruleId" | "entityIds">,
+): string {
+  const entityIds = [...new Set(finding.entityIds)].sort();
+  return createHash("sha256")
+    .update(`${finding.ruleId}\n${entityIds.join(",")}`)
+    .digest("hex");
+}
+
+function ruleExceptionStatus(
+  exception: RuleExceptionRecord,
+  now: number,
+): "active" | "expired" | "revoked" {
+  if (exception.revokedAt !== null) return "revoked";
+  if (exception.expiresAt !== null && exception.expiresAt <= now) {
+    return "expired";
+  }
+  return "active";
+}
+
+function describeRuleException(
+  exception: RuleExceptionRecord,
+  currentFindingKeys: Set<string>,
+  now: number,
+) {
+  return {
+    ...exception,
+    status: ruleExceptionStatus(exception, now),
+    matchesCurrentFinding: currentFindingKeys.has(exception.findingKey),
+  };
 }
 
 function parseRepositoryId(value: string): string | null {

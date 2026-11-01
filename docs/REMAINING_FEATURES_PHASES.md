@@ -78,7 +78,7 @@ This plan reconciles the two supplied implementation specifications with the cur
 
 **Exit gate:** normalized incremental output equals clean analysis for golden change scenarios, including evidence and ranges; unchanged entities retain UUIDs; no-op refresh adds no semantic revision.
 
-### Phase 4 — Traceability, drift review, and accessible web workflow (freshness and dependency drift implemented; exceptions and accessibility review pending)
+### Phase 4 — Traceability, drift review, and accessible web workflow (freshness, drift conflicts, source-located findings, exceptions, and WCAG 2.2 AA review implemented; assistive-technology testing pending)
 
 **Purpose:** close both navigation directions and make architecture discrepancies reviewable.
 
@@ -89,11 +89,13 @@ This plan reconciles the two supplied implementation specifications with the cur
 - Complete symbol-to-intended-component and component-to-symbol navigation with explicit mapping provenance and reversible user decisions.
 - **Implemented:** mapped code relationships carry developer evidence, code-to-component mapping can be removed through the local agent, and mapped dependency drift is reviewed from both intended component dependencies and actual imports between mapped entities.
 - Compare intended and actual entities/relationships; report missing, unexpected, and conflicting facts with evidence and source locations.
-- **Partial:** the versioned rule set now reports intended dependencies without observed mapped imports and observed mapped imports without intended component dependencies. Broader entity/relationship conflict checks and source locations on every finding remain pending.
+- **Implemented:** rule set 1.2.0 adds nested-ownership conflicts (code mapped to a component disjoint from its container's) and intended-dependency cycles, notes reversed dependencies, and gives every finding up to 10 source locations plus a total count; intent-only findings say they have none. Evaluation is linear-time and covered by a large-graph regression test ([ADR 0018](decisions/0018-rule-set-1-2-drift-conflicts-and-locations.md)).
 - Add auditable exceptions with author, rationale, scope, and optional expiry/status without mutating intended architecture.
+- **Implemented:** append-only exception records keyed by a stable finding key (rule plus permanent entity UUIDs), stored outside the graph, with active/expired/revoked status, revoke-with-reason, and one unrevoked exception per finding. Excepted findings stay listed in the rules page with the reviewer, date, expiry, and rationale. Author names are self-attested. Covered by storage, agent, contract, and client tests and the run-codifier browser flow ([ADR 0017](decisions/0017-auditable-rule-exceptions.md)).
 - Ensure the graph has keyboard-operable controls and an equivalent structured view; review critical paths against WCAG 2.2 AA and record findings.
+- **Implemented:** WCAG 2.2 AA review recorded in [ACCESSIBILITY_REVIEW.md](ACCESSIBILITY_REVIEW.md): automated axe-core plus scripted keyboard, focus-obscured, target-size, and reflow checks over six UI states; contrast, non-text contrast, reflow, focus-obscured, target-size, label-in-name, and role issues fixed; repeatable with `run-codifier --flow a11y`.
 
-Phase 4 remains in progress. Auditable exception records, full drift coverage, formal WCAG 2.2 AA review, and accessibility findings remain outstanding.
+Phase 4 remains in progress only for verification beyond automation: screen-reader and speech-input testing, the 1.4.12 text-spacing check, and the React Flow controls naming item listed in the accessibility review.
 
 **Exit gate:** bidirectional navigation and drift scenarios work against the real agent API; stale links never silently redirect; exceptions are reviewable and reversible; accessibility findings are recorded and resolved or tracked.
 

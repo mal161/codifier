@@ -28,4 +28,5 @@ The MVP calls for explicit architecture checks over the canonical graph. Finding
 - Evidence IDs and graph references let developers inspect the input facts behind each finding.
 - Rule-set versioning is exposed so results can be interpreted against the checks that produced them.
 - Rule set version 1.1.0 adds mapped dependency drift checks. Unmapped endpoints do not produce inferred component dependencies, and findings remain review prompts.
+- Rule set version 1.2.0 adds intent conflict checks and source locations on every finding ([ADR 0018](0018-rule-set-1-2-drift-conflicts-and-locations.md)).
 - Extending or authoring rules requires explicit semantics, evidence requirements, bounded evaluation, and client presentation.

@@ -5,6 +5,9 @@ import {
   analysisJobResultSchema,
   analysisJobSchema,
   analysisReconciliationSchema,
+  reviewedArchitectureRuleEvaluationSchema,
+  ruleExceptionCreateRequestSchema,
+  ruleExceptionRevokeRequestSchema,
   gitContextSchema,
   sourceLocatorSchema,
 } from "../src/index.js";
@@ -52,7 +55,7 @@ describe("architectureRuleEvaluationSchema", () => {
   const validEvaluation = {
     repositoryId: "7b9442d6-faaa-49f9-a39e-7de8a276a978",
     revision: "a1b2c3d",
-    ruleSetVersion: "1.1.0",
+    ruleSetVersion: "1.2.0",
     findings: [
       {
         ruleId: "dependency-cycle",
@@ -62,6 +65,18 @@ describe("architectureRuleEvaluationSchema", () => {
         entityIds: ["9ac38590-a7ac-4101-bfc9-dc323d1c9301"],
         relationshipIds: ["9e94e1f3-8a77-4de6-9957-562e07163ddd"],
         evidenceIds: ["05a4d48e-1e17-4ca7-9e03-773ea13d3561"],
+        sourceLocations: [
+          {
+            repositoryId: "7b9442d6-faaa-49f9-a39e-7de8a276a978",
+            repositoryRelativePath: "src/a.ts",
+            revision: "a1b2c3d",
+            range: {
+              start: { line: 1, column: 1 },
+              end: { line: 1, column: 20 },
+            },
+          },
+        ],
+        sourceLocationCount: 1,
       },
     ],
   };
@@ -310,6 +325,83 @@ describe("analysisReconciliationSchema", () => {
       analysisReconciliationSchema.parse({
         ...reconciliation,
         parseReuse: { reusedFiles: 1, parsedFiles: 1, cachedBytes: 9 },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("rule exception contracts", () => {
+  const findingKey = "a".repeat(64);
+
+  it("trims reviewer input and rejects blank or unknown fields", () => {
+    expect(
+      ruleExceptionCreateRequestSchema.parse({
+        findingKey,
+        author: "  Dana ",
+        rationale: " Planned. ",
+      }),
+    ).toEqual({ findingKey, author: "Dana", rationale: "Planned." });
+    for (const body of [
+      { findingKey, author: "   ", rationale: "x" },
+      { findingKey: "A".repeat(64), author: "Dana", rationale: "x" },
+      { findingKey, author: "Dana", rationale: "x", status: "active" },
+      { findingKey, author: "Dana", rationale: "x", expiresAt: 1.5 },
+    ]) {
+      expect(() => ruleExceptionCreateRequestSchema.parse(body)).toThrow();
+    }
+    expect(() =>
+      ruleExceptionRevokeRequestSchema.parse({ revokedBy: "Lee" }),
+    ).toThrow();
+  });
+
+  it("requires review state on every served finding", () => {
+    const evaluation = {
+      repositoryId: "7b9442d6-faaa-49f9-a39e-7de8a276a978",
+      revision: null,
+      ruleSetVersion: "1.2.0",
+      findings: [
+        {
+          ruleId: "dependency-cycle",
+          title: "Cycle",
+          severity: "warning",
+          message: "Review.",
+          entityIds: [],
+          relationshipIds: [],
+          evidenceIds: [],
+          sourceLocations: [],
+          sourceLocationCount: 0,
+          findingKey,
+          exception: null,
+        },
+      ],
+    };
+    expect(reviewedArchitectureRuleEvaluationSchema.parse(evaluation)).toEqual(
+      evaluation,
+    );
+    const withoutKey: Record<string, unknown> = { ...evaluation.findings[0] };
+    delete withoutKey.findingKey;
+    expect(() =>
+      reviewedArchitectureRuleEvaluationSchema.parse({
+        ...evaluation,
+        findings: [withoutKey],
+      }),
+    ).toThrow();
+    expect(() =>
+      reviewedArchitectureRuleEvaluationSchema.parse({
+        ...evaluation,
+        findings: [
+          {
+            ...evaluation.findings[0],
+            exception: {
+              id: "d1c2b3a4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+              status: "revoked",
+              author: "Dana",
+              rationale: "x",
+              createdAt: 1,
+              expiresAt: null,
+            },
+          },
+        ],
       }),
     ).toThrow();
   });

@@ -11,6 +11,8 @@ import {
   listArchitectureTemplates,
   mapEntityToIntendedComponent,
   normalizeAgentUrl,
+  recordRuleException,
+  revokeRuleException,
   startAnalysisJob,
 } from "../src/agent/client.js";
 
@@ -286,7 +288,7 @@ describe("local agent client", () => {
     const evaluation = {
       repositoryId,
       revision: "a1b2c3d",
-      ruleSetVersion: "1.1.0",
+      ruleSetVersion: "1.2.0",
       findings: [
         {
           ruleId: "unmapped-intended-component",
@@ -296,6 +298,17 @@ describe("local agent client", () => {
           entityIds: ["9ac38590-a7ac-4101-bfc9-dc323d1c9301"],
           relationshipIds: [],
           evidenceIds: ["05a4d48e-1e17-4ca7-9e03-773ea13d3561"],
+          sourceLocations: [],
+          sourceLocationCount: 0,
+          findingKey: "a".repeat(64),
+          exception: {
+            id: "d1c2b3a4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            status: "active",
+            author: "Dana",
+            rationale: "Planned work.",
+            createdAt: 1,
+            expiresAt: null,
+          },
         },
       ],
     };
@@ -310,6 +323,131 @@ describe("local agent client", () => {
     await expect(
       getArchitectureRuleEvaluation(baseUrl, token, repositoryId, fetcher),
     ).resolves.toEqual(evaluation);
+  });
+
+  it("records and revokes rule exceptions with validated responses", async () => {
+    const exceptionId = "d1c2b3a4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    const record = {
+      id: exceptionId,
+      repositoryId,
+      findingKey: "a".repeat(64),
+      ruleId: "unmapped-intended-component",
+      entityIds: ["9ac38590-a7ac-4101-bfc9-dc323d1c9301"],
+      rationale: "Planned work.",
+      author: "Dana",
+      createdAt: 1,
+      expiresAt: null,
+      revokedAt: null,
+      revokedBy: null,
+      revokeReason: null,
+      status: "active",
+      matchesCurrentFinding: true,
+    };
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const fetcher: typeof fetch = vi.fn(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      requests.push({ path, body: JSON.parse(String(init?.body)) });
+      const revoked = path.endsWith("/revoke");
+      return new Response(
+        JSON.stringify(
+          revoked
+            ? {
+                ...record,
+                status: "revoked",
+                revokedAt: 2,
+                revokedBy: "Lee",
+                revokeReason: "Done.",
+              }
+            : record,
+        ),
+        { status: revoked ? 200 : 201 },
+      );
+    });
+
+    await expect(
+      recordRuleException(
+        baseUrl,
+        token,
+        repositoryId,
+        {
+          findingKey: record.findingKey,
+          author: "Dana",
+          rationale: "Planned work.",
+          expiresAt: null,
+        },
+        fetcher,
+      ),
+    ).resolves.toEqual(record);
+    await expect(
+      revokeRuleException(
+        baseUrl,
+        token,
+        repositoryId,
+        exceptionId,
+        { revokedBy: "Lee", reason: "Done." },
+        fetcher,
+      ),
+    ).resolves.toMatchObject({ status: "revoked", revokedBy: "Lee" });
+    expect(requests).toEqual([
+      {
+        path: `/v1/repositories/${repositoryId}/rule-exceptions`,
+        body: {
+          findingKey: record.findingKey,
+          author: "Dana",
+          rationale: "Planned work.",
+          expiresAt: null,
+        },
+      },
+      {
+        path: `/v1/repositories/${repositoryId}/rule-exceptions/${exceptionId}/revoke`,
+        body: { revokedBy: "Lee", reason: "Done." },
+      },
+    ]);
+  });
+
+  it("refuses blank exception input and surfaces agent conflicts", async () => {
+    const neverCalled = vi.fn<typeof fetch>();
+    await expect(
+      recordRuleException(
+        baseUrl,
+        token,
+        repositoryId,
+        {
+          findingKey: "a".repeat(64),
+          author: " ",
+          rationale: "x",
+          expiresAt: null,
+        },
+        neverCalled,
+      ),
+    ).rejects.toThrow("Enter your name and a rationale");
+    expect(neverCalled).not.toHaveBeenCalled();
+
+    const conflict: typeof fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: "active_exception_exists",
+            message:
+              "This finding already has an active exception; revoke it before recording another.",
+          }),
+          { status: 409 },
+        ),
+    );
+    await expect(
+      recordRuleException(
+        baseUrl,
+        token,
+        repositoryId,
+        {
+          findingKey: "a".repeat(64),
+          author: "Dana",
+          rationale: "x",
+          expiresAt: null,
+        },
+        conflict,
+      ),
+    ).rejects.toThrow("already has an active exception");
   });
 
   it("maps an observed entity to an intended component through the agent", async () => {

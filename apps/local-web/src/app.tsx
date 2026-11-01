@@ -10,9 +10,9 @@ import type {
 } from "@codifier/domain";
 import type {
   AnalysisJob,
-  ArchitectureRuleEvaluation,
-  ArchitectureRuleFinding,
   ArchitectureTemplate,
+  ReviewedArchitectureRuleEvaluation,
+  ReviewedArchitectureRuleFinding,
 } from "@codifier/contracts";
 import {
   cancelAnalysisJob,
@@ -28,7 +28,9 @@ import {
   listGraphRevisions,
   mapEntityToIntendedComponent,
   normalizeAgentUrl,
+  recordRuleException,
   removeEntityMapping,
+  revokeRuleException,
   restoreGraphRevision,
   startAnalysisJob,
   type GraphRevisionSummary,
@@ -70,7 +72,7 @@ export function App() {
     ArchitectureTemplate[]
   >([]);
   const [ruleEvaluation, setRuleEvaluation] =
-    useState<ArchitectureRuleEvaluation | null>(null);
+    useState<ReviewedArchitectureRuleEvaluation | null>(null);
   const [search, setSearch] = useState("");
   const [sourceLocation, setSourceLocation] = useState("");
   const [sourceMatches, setSourceMatches] = useState<GraphEntity[] | null>(
@@ -94,6 +96,7 @@ export function App() {
     | "history-load"
     | "history-restore"
     | "history-export"
+    | "exception-save"
     | null
   >(null);
   // History is tied to the graph object it was loaded for, so any later graph
@@ -366,6 +369,72 @@ export function App() {
     } catch (reason) {
       setIsConnected(false);
       setError(errorMessage(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function saveRuleException(input: {
+    findingKey: string;
+    author: string;
+    rationale: string;
+    expiresAt: number | null;
+  }): Promise<boolean> {
+    if (!snapshot) return false;
+    setBusyAction("exception-save");
+    setError(null);
+    setNotice(null);
+    try {
+      const baseUrl = normalizeAgentUrl(agentUrl);
+      await recordRuleException(baseUrl, token, snapshot.repositoryId, input);
+      setRuleEvaluation(
+        await getArchitectureRuleEvaluation(
+          baseUrl,
+          token,
+          snapshot.repositoryId,
+        ),
+      );
+      setNotice(
+        "Exception recorded. The finding stays listed with your rationale; the graph was not changed.",
+      );
+      return true;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      return false;
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function revokeRuleExceptionById(
+    exceptionId: string,
+    input: { revokedBy: string; reason: string },
+  ): Promise<boolean> {
+    if (!snapshot) return false;
+    setBusyAction("exception-save");
+    setError(null);
+    setNotice(null);
+    try {
+      const baseUrl = normalizeAgentUrl(agentUrl);
+      await revokeRuleException(
+        baseUrl,
+        token,
+        snapshot.repositoryId,
+        exceptionId,
+        input,
+      );
+      setRuleEvaluation(
+        await getArchitectureRuleEvaluation(
+          baseUrl,
+          token,
+          snapshot.repositoryId,
+        ),
+      );
+      setNotice("Exception revoked. Its record and rationale are kept.");
+      return true;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      return false;
     } finally {
       setBusyAction(null);
     }
@@ -695,12 +764,15 @@ export function App() {
     <div className="min-h-screen bg-canvas text-ink">
       <header className="border-b border-line bg-white/80">
         <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-3 px-5 py-4 sm:flex-nowrap sm:gap-5 sm:px-8">
+          {/* WCAG 2.5.3: the accessible name starts with the visible text. */}
           <a
-            aria-label="Codifier codebase map home"
             className="flex items-center gap-3 text-ink no-underline"
             href="#top"
           >
-            <span className="grid size-10 place-items-center rounded-xl bg-forest text-lg font-semibold text-white">
+            <span
+              aria-hidden="true"
+              className="grid size-10 place-items-center rounded-xl bg-forest text-lg font-semibold text-white"
+            >
               c.
             </span>
             <span>
@@ -710,6 +782,7 @@ export function App() {
               <span className="block text-[11px] uppercase tracking-[0.16em] text-muted">
                 local codebase map
               </span>
+              <span className="sr-only">, home</span>
             </span>
           </a>
           <nav
@@ -769,7 +842,7 @@ export function App() {
       </header>
 
       <main
-        className="mx-auto grid max-w-[1500px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[300px_minmax(300px,1fr)_minmax(330px,0.9fr)]"
+        className="mx-auto grid max-w-[1500px] grid-cols-[minmax(0,1fr)] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[300px_minmax(300px,1fr)_minmax(330px,0.9fr)]"
         id="top"
       >
         {activeView === "marketplace" ? (
@@ -788,7 +861,10 @@ export function App() {
             hasRepository={snapshot !== null}
             isLoading={busyAction === "rules-load"}
             onNavigateExplorer={() => setActiveView("explorer")}
+            isSavingException={busyAction === "exception-save"}
+            onRecordException={saveRuleException}
             onRefresh={() => void openArchitectureRules()}
+            onRevokeException={revokeRuleExceptionById}
             onSelectEntity={showRuleEntity}
             snapshot={snapshot}
           />
@@ -1335,7 +1411,7 @@ export function App() {
                   )}
                 </div>
               )}
-              <div className="border-t border-line px-4 py-3 text-[11px] text-muted">
+              <div className="border-t border-line px-4 py-3 text-[11px] text-muted [overflow-wrap:anywhere]">
                 {snapshot
                   ? `Revision ${snapshot.revision ?? "not specified"} · ${snapshot.entities.length} graph entities`
                   : "Connect to the local agent and analyze a repository to begin."}
@@ -1416,7 +1492,7 @@ export function App() {
           {error ?? notice}
           <button
             aria-label="Dismiss message"
-            className="ml-3 font-semibold underline underline-offset-2"
+            className="ml-3 inline-flex min-h-6 items-center px-1 font-semibold underline underline-offset-2"
             onClick={() => {
               setError(null);
               setNotice(null);
@@ -1675,19 +1751,35 @@ function ArchitectureRulesPage({
   evaluation,
   hasRepository,
   isLoading,
+  isSavingException,
   onNavigateExplorer,
+  onRecordException,
   onRefresh,
+  onRevokeException,
   onSelectEntity,
   snapshot,
 }: {
-  evaluation: ArchitectureRuleEvaluation | null;
+  evaluation: ReviewedArchitectureRuleEvaluation | null;
   hasRepository: boolean;
   isLoading: boolean;
+  isSavingException: boolean;
   onNavigateExplorer: () => void;
+  onRecordException: (input: {
+    findingKey: string;
+    author: string;
+    rationale: string;
+    expiresAt: number | null;
+  }) => Promise<boolean>;
   onRefresh: () => void;
+  onRevokeException: (
+    exceptionId: string,
+    input: { revokedBy: string; reason: string },
+  ) => Promise<boolean>;
   onSelectEntity: (entityId: string) => void;
   snapshot: GraphSnapshot | null;
 }) {
+  // Kept in page memory only so each form does not ask for the name again.
+  const [reviewer, setReviewer] = useState("");
   const entityById = useMemo(
     () =>
       new Map(snapshot?.entities.map((entity) => [entity.id, entity]) ?? []),
@@ -1703,6 +1795,10 @@ function ArchitectureRulesPage({
   const infoCount =
     evaluation?.findings.filter((finding) => finding.severity === "info")
       .length ?? 0;
+  const acceptedCount =
+    evaluation?.findings.filter(
+      (finding) => finding.exception?.status === "active",
+    ).length ?? 0;
 
   return (
     <section
@@ -1778,6 +1874,10 @@ function ArchitectureRulesPage({
               <span className="rounded-full bg-canvas px-3 py-1.5 text-xs text-muted">
                 {infoCount} design gap{infoCount === 1 ? "" : "s"}
               </span>
+              <span className="rounded-full bg-canvas px-3 py-1.5 text-xs text-muted">
+                {acceptedCount} accepted exception
+                {acceptedCount === 1 ? "" : "s"}
+              </span>
               <span className="ml-auto text-[11px] text-muted">
                 Rule set v{evaluation.ruleSetVersion} · graph revision{" "}
                 {evaluation.revision ?? "not specified"}
@@ -1800,8 +1900,13 @@ function ArchitectureRulesPage({
                     entityById={entityById}
                     evidenceById={evidenceById}
                     finding={finding}
-                    key={`${finding.ruleId}:${finding.entityIds.join(",")}`}
+                    isSaving={isSavingException}
+                    key={finding.findingKey}
+                    onRecordException={onRecordException}
+                    onReviewerChange={setReviewer}
+                    onRevokeException={onRevokeException}
                     onSelectEntity={onSelectEntity}
+                    reviewer={reviewer}
                   />
                 ))}
               </ul>
@@ -1834,12 +1939,30 @@ function ArchitectureRuleFindingCard({
   entityById,
   evidenceById,
   finding,
+  isSaving,
+  onRecordException,
+  onReviewerChange,
+  onRevokeException,
   onSelectEntity,
+  reviewer,
 }: {
   entityById: Map<string, GraphEntity>;
   evidenceById: Map<string, Evidence>;
-  finding: ArchitectureRuleFinding;
+  finding: ReviewedArchitectureRuleFinding;
+  isSaving: boolean;
+  onRecordException: (input: {
+    findingKey: string;
+    author: string;
+    rationale: string;
+    expiresAt: number | null;
+  }) => Promise<boolean>;
+  onReviewerChange: (value: string) => void;
+  onRevokeException: (
+    exceptionId: string,
+    input: { revokedBy: string; reason: string },
+  ) => Promise<boolean>;
   onSelectEntity: (entityId: string) => void;
+  reviewer: string;
 }) {
   const relatedEntities = finding.entityIds
     .map((entityId) => entityById.get(entityId))
@@ -1905,7 +2028,9 @@ function ArchitectureRuleFindingCard({
               key={item.id}
             >
               <span className="font-medium text-ink">{item.origin}</span>
-              <span>: {item.description}</span>
+              <span className="[overflow-wrap:anywhere]">
+                : {item.description}
+              </span>
               {item.source && (
                 <span className="mt-0.5 block font-mono text-[10px]">
                   {item.source.repositoryRelativePath}:
@@ -1922,12 +2047,234 @@ function ArchitectureRuleFindingCard({
           )}
         </ul>
       )}
+      <FindingSourceLocations finding={finding} />
+      <RuleExceptionPanel
+        finding={finding}
+        isSaving={isSaving}
+        onRecordException={onRecordException}
+        onReviewerChange={onReviewerChange}
+        onRevokeException={onRevokeException}
+        reviewer={reviewer}
+      />
     </li>
   );
 }
 
+function FindingSourceLocations({
+  finding,
+}: {
+  finding: ReviewedArchitectureRuleFinding;
+}) {
+  if (finding.sourceLocationCount === 0) {
+    return (
+      <p className="mt-3 text-[11px] leading-5 text-muted">
+        No source location: this finding concerns intended architecture only.
+      </p>
+    );
+  }
+  const hidden = finding.sourceLocationCount - finding.sourceLocations.length;
+  return (
+    <div className="mt-3">
+      <h3 className="text-[11px] font-semibold text-ink">
+        Source locations ({finding.sourceLocationCount})
+      </h3>
+      <ul className="mt-1 flex flex-wrap gap-1.5">
+        {finding.sourceLocations.map((source) => {
+          const { start, end } = source.range;
+          const label = `${source.repositoryRelativePath}:${start.line}:${start.column}`;
+          return (
+            <li
+              className="rounded bg-canvas px-2 py-1 font-mono text-[11px] text-ink"
+              key={`${label}-${end.line}:${end.column}`}
+              title={`Lines ${start.line}–${end.line}`}
+            >
+              {label}
+            </li>
+          );
+        })}
+        {hidden > 0 && (
+          <li className="px-1 py-1 text-[11px] text-muted">
+            and {hidden} more
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
+function RuleExceptionPanel({
+  finding,
+  isSaving,
+  onRecordException,
+  onReviewerChange,
+  onRevokeException,
+  reviewer,
+}: {
+  finding: ReviewedArchitectureRuleFinding;
+  isSaving: boolean;
+  onRecordException: (input: {
+    findingKey: string;
+    author: string;
+    rationale: string;
+    expiresAt: number | null;
+  }) => Promise<boolean>;
+  onReviewerChange: (value: string) => void;
+  onRevokeException: (
+    exceptionId: string,
+    input: { revokedBy: string; reason: string },
+  ) => Promise<boolean>;
+  reviewer: string;
+}) {
+  const [mode, setMode] = useState<"idle" | "record" | "revoke">("idle");
+  const [text, setText] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+  const idPrefix = `exception-${finding.findingKey.slice(0, 12)}`;
+  const exception = finding.exception;
+  const formatDate = (value: number) => new Date(value).toLocaleDateString();
+  const close = () => {
+    setMode("idle");
+    setText("");
+    setExpiryDate("");
+  };
+
+  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const saved =
+      mode === "record"
+        ? await onRecordException({
+            findingKey: finding.findingKey,
+            author: reviewer,
+            rationale: text,
+            // A chosen date stays valid through the end of that local day.
+            expiresAt: expiryDate
+              ? new Date(`${expiryDate}T23:59:59.999`).getTime()
+              : null,
+          })
+        : exception
+          ? await onRevokeException(exception.id, {
+              revokedBy: reviewer,
+              reason: text,
+            })
+          : false;
+    if (saved) close();
+  }
+
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      {exception?.status === "active" && (
+        <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2.5 text-xs leading-5 text-green-900">
+          <p className="font-semibold">
+            Accepted exception · {exception.author} ·{" "}
+            {formatDate(exception.createdAt)}
+            {exception.expiresAt
+              ? ` · expires ${formatDate(exception.expiresAt)}`
+              : " · no expiry"}
+          </p>
+          <p className="mt-0.5">{exception.rationale}</p>
+        </div>
+      )}
+      {exception?.status === "expired" && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900">
+          <p className="font-semibold">
+            Exception expired {formatDate(exception.expiresAt ?? 0)} · review
+            this finding again
+          </p>
+          <p className="mt-0.5">
+            {exception.author}: {exception.rationale}
+          </p>
+        </div>
+      )}
+      {mode === "idle" ? (
+        <button
+          className={`${secondaryButtonClass} mt-2`}
+          disabled={isSaving}
+          onClick={() => setMode(exception ? "revoke" : "record")}
+          type="button"
+        >
+          {exception ? "Revoke exception" : "Record exception"}
+        </button>
+      ) : (
+        <form
+          aria-label={
+            mode === "record" ? "Record exception" : "Revoke exception"
+          }
+          className="mt-3 space-y-3 rounded-lg bg-canvas p-3"
+          onSubmit={(event) => void submit(event)}
+        >
+          <Field label="Your name" htmlFor={`${idPrefix}-reviewer`}>
+            <input
+              autoComplete="name"
+              className={inputClass}
+              id={`${idPrefix}-reviewer`}
+              maxLength={120}
+              onChange={(event) => onReviewerChange(event.target.value)}
+              required
+              value={reviewer}
+            />
+          </Field>
+          <Field
+            label={
+              mode === "record"
+                ? "Why is this finding acceptable?"
+                : "Why revoke this exception?"
+            }
+            htmlFor={`${idPrefix}-text`}
+          >
+            <textarea
+              className={`${inputClass} min-h-20`}
+              id={`${idPrefix}-text`}
+              maxLength={2000}
+              onChange={(event) => setText(event.target.value)}
+              required
+              value={text}
+            />
+          </Field>
+          {mode === "record" && (
+            <Field label="Expires (optional)" htmlFor={`${idPrefix}-expiry`}>
+              <input
+                className={inputClass}
+                id={`${idPrefix}-expiry`}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={(event) => setExpiryDate(event.target.value)}
+                type="date"
+                value={expiryDate}
+              />
+            </Field>
+          )}
+          <p className="text-[11px] leading-4 text-muted">
+            {mode === "record"
+              ? "The finding stays listed with this rationale. The graph and intended architecture are not changed."
+              : "The exception's record and rationale are kept; the finding returns to open review."}
+          </p>
+          <div className="flex gap-2">
+            <button
+              className={primaryButtonClass}
+              disabled={isSaving}
+              type="submit"
+            >
+              {isSaving
+                ? "Saving…"
+                : mode === "record"
+                  ? "Save exception"
+                  : "Revoke exception"}
+            </button>
+            <button
+              className={secondaryButtonClass}
+              disabled={isSaving}
+              onClick={close}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 const inputClass =
-  "w-full rounded-xl border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-stone-400 focus:border-forest focus:ring-2 focus:ring-forest/15";
+  "w-full rounded-xl border border-field bg-white px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-stone-500 focus:border-forest focus:ring-2 focus:ring-forest/15";
 const primaryButtonClass =
   "inline-flex min-h-10 items-center justify-center rounded-xl bg-forest px-3 py-2 text-xs font-semibold text-white transition hover:bg-forest-dark focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-forest disabled:cursor-not-allowed disabled:opacity-45";
 const secondaryButtonClass =
@@ -2578,7 +2925,8 @@ function EntityDetails({
               </button>
               <a
                 aria-disabled={!sourceNavigation.uri}
-                aria-label={`Open ${entity.source.repositoryRelativePath} at line ${entity.source.range.start.line} in VS Code`}
+                role={sourceNavigation.uri ? undefined : "link"}
+                aria-label={`Open in VS Code: ${entity.source.repositoryRelativePath}, line ${entity.source.range.start.line}`}
                 className={`${secondaryButtonClass} min-h-8 px-2.5 py-1.5 text-[10px] ${sourceNavigation.uri ? "" : "pointer-events-none opacity-45"}`}
                 href={sourceNavigation.uri ?? undefined}
                 rel="noreferrer"
@@ -2587,7 +2935,7 @@ function EntityDetails({
                 Open in VS Code
               </a>
               <button
-                aria-label={`Copy source location for ${entity.name}`}
+                aria-label={`Copy location: ${entity.name}`}
                 className="shrink-0 rounded-xl border border-line bg-white px-2.5 py-1.5 text-[10px] font-semibold text-ink hover:bg-mist focus-visible:outline-2 focus-visible:outline-forest"
                 onClick={() => onCopyLocation(entity.source!)}
                 type="button"
@@ -2607,7 +2955,7 @@ function EntityDetails({
               </p>
             )}
           </div>
-          <p className="mt-2 border-t border-line pt-2 text-[10px] leading-4 text-muted">
+          <p className="mt-2 border-t border-line pt-2 text-[10px] leading-4 text-muted [overflow-wrap:anywhere]">
             Revision: {entity.source.revision ?? "not specified"}
           </p>
         </div>
@@ -2732,7 +3080,7 @@ function EvidenceList({
     <ul className={`${compact ? "mt-2" : "mt-3"} space-y-2`}>
       {evidence.map((item) => (
         <li
-          className={`${compact ? "text-[10px]" : "text-xs"} leading-5 text-muted`}
+          className={`${compact ? "text-[10px]" : "text-xs"} leading-5 text-muted [overflow-wrap:anywhere]`}
           key={item.id}
         >
           <span className="mr-1.5 rounded bg-canvas px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-forest">

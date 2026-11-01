@@ -7,6 +7,24 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+export const architectureRuleExceptions = sqliteTable(
+  "architecture_rule_exceptions",
+  {
+    id: text("id").primaryKey(),
+    repositoryId: text("repository_id").notNull(),
+    findingKey: text("finding_key").notNull(),
+    ruleId: text("rule_id").notNull(),
+    entityIdsJson: text("entity_ids_json").notNull(),
+    rationale: text("rationale").notNull(),
+    author: text("author").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    revokedBy: text("revoked_by"),
+    revokeReason: text("revoke_reason"),
+  },
+);
+
 export const repositories = sqliteTable("repositories", {
   id: text("id").primaryKey(),
   revision: text("revision"),

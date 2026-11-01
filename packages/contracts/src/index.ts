@@ -214,6 +214,8 @@ export const architectureRuleFindingSchema = z
     entityIds: z.array(uuidSchema).max(10_000),
     relationshipIds: z.array(uuidSchema).max(50_000),
     evidenceIds: z.array(uuidSchema).max(50_000),
+    sourceLocations: z.array(sourceLocatorSchema).max(10),
+    sourceLocationCount: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -222,10 +224,90 @@ export const architectureRuleEvaluationSchema: z.ZodType<ArchitectureRuleEvaluat
     .object({
       repositoryId: uuidSchema,
       revision: z.string().min(1).nullable(),
-      ruleSetVersion: z.literal("1.1.0"),
+      ruleSetVersion: z.literal("1.2.0"),
       findings: z.array(architectureRuleFindingSchema),
     })
     .strict();
+
+const findingKeySchema = z.string().regex(/^[0-9a-f]{64}$/);
+const reviewerNameSchema = z.string().trim().min(1).max(120);
+const reviewTextSchema = z.string().trim().min(1).max(2_000);
+
+/** Body for recording a developer-authored exception to one current finding. */
+export const ruleExceptionCreateRequestSchema = z
+  .object({
+    findingKey: findingKeySchema,
+    author: reviewerNameSchema,
+    rationale: reviewTextSchema,
+    expiresAt: z.number().int().positive().nullable().optional(),
+  })
+  .strict();
+
+export const ruleExceptionRevokeRequestSchema = z
+  .object({
+    revokedBy: reviewerNameSchema,
+    reason: reviewTextSchema,
+  })
+  .strict();
+
+export const ruleExceptionSchema = z
+  .object({
+    id: uuidSchema,
+    repositoryId: uuidSchema,
+    findingKey: findingKeySchema,
+    ruleId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    entityIds: z.array(uuidSchema),
+    rationale: z.string().min(1),
+    author: z.string().min(1),
+    createdAt: z.number().int().nonnegative(),
+    expiresAt: z.number().int().positive().nullable(),
+    revokedAt: z.number().int().nonnegative().nullable(),
+    revokedBy: z.string().min(1).nullable(),
+    revokeReason: z.string().min(1).nullable(),
+    status: z.enum(["active", "expired", "revoked"]),
+    /** False when the finding no longer appears for the saved graph. */
+    matchesCurrentFinding: z.boolean(),
+  })
+  .strict();
+
+export const ruleExceptionListSchema = z
+  .object({ exceptions: z.array(ruleExceptionSchema) })
+  .strict();
+
+const findingExceptionSchema = z
+  .object({
+    id: uuidSchema,
+    status: z.enum(["active", "expired"]),
+    author: z.string().min(1),
+    rationale: z.string().min(1),
+    createdAt: z.number().int().nonnegative(),
+    expiresAt: z.number().int().positive().nullable(),
+  })
+  .strict();
+
+/** Rule evaluation as served by the agent: findings carry review state. */
+export const reviewedArchitectureRuleEvaluationSchema = z
+  .object({
+    repositoryId: uuidSchema,
+    revision: z.string().min(1).nullable(),
+    ruleSetVersion: z.literal("1.2.0"),
+    findings: z.array(
+      architectureRuleFindingSchema
+        .extend({
+          findingKey: findingKeySchema,
+          exception: findingExceptionSchema.nullable(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type RuleException = z.infer<typeof ruleExceptionSchema>;
+export type ReviewedArchitectureRuleEvaluation = z.infer<
+  typeof reviewedArchitectureRuleEvaluationSchema
+>;
+export type ReviewedArchitectureRuleFinding =
+  ReviewedArchitectureRuleEvaluation["findings"][number];
 
 export type ArchitectureTemplate = z.infer<typeof architectureTemplateSchema>;
 export type ArchitectureRuleFinding = z.infer<
