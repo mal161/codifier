@@ -4,7 +4,7 @@
 
 The workspace includes `domain`, `contracts`, SQLite `storage`, `analysis-core`, the authenticated `apps/local-agent`, the local web explorer, and an initial command-based VS Code extension. The extension reuses the agent for workspace analysis and graph navigation; a local VSIX has been packaged, while Extension Host, installation, and cross-platform verification remain pending. Selective incremental analysis and cloud sync are not implemented. The user-directed MVP architecture and implementation sequence are in [ADR 0006](decisions/0006-local-companion-agent.md) and [TECH_STACK.md](TECH_STACK.md).
 
-The local API currently requires a `CODIFIER_AGENT_TOKEN` of at least 32 bytes, binds only to loopback, and checks Host/Origin. The selected SQLite adapter is `better-sqlite3` with Drizzle; it stores the current graph plus append-only graph snapshot history as described in [ADR 0009](decisions/0009-local-graph-revision-storage.md). Analysis job recovery, history export/restore, retention, cross-platform native packaging, secure token provisioning/pairing, cloud provider/identity, sync conflict rules, and the OS support matrix still require implementation, validation, or separate decisions.
+The local API currently requires a `CODIFIER_AGENT_TOKEN` of at least 32 bytes, binds only to loopback, and checks Host/Origin. The selected SQLite adapter is `better-sqlite3` with Drizzle; it stores the current graph plus append-only graph snapshot history as described in [ADR 0009](decisions/0009-local-graph-revision-storage.md). History export and UI, retention, cross-platform native packaging, secure token provisioning/pairing, cloud provider/identity, sync conflict rules, and the OS support matrix still require implementation, validation, or separate decisions.
 
 ## Install and validate
 
@@ -36,7 +36,7 @@ pnpm --filter @codifier/local-agent start -- graph get <repository-uuid>
 pnpm --filter @codifier/local-agent start -- graph put .\snapshot.json
 ```
 
-`graph put` validates the JSON snapshot before sending it to the agent. Use `serve --database <path>` to select a database file; the agent intentionally rejects non-loopback bind addresses. Authenticated clients can list graph revisions at `/v1/repositories/<repository-uuid>/revisions` and retrieve a snapshot at `/v1/repositories/<repository-uuid>/revisions/<revision-uuid>`. To use a browser client, explicitly allow its loopback origin with `CODIFIER_AGENT_ALLOWED_ORIGINS` as a comma-separated list. Source files are read locally by the agent and are not sent to an external service.
+`graph put` validates the JSON snapshot before sending it to the agent. Use `serve --database <path>` to select a database file; the agent intentionally rejects non-loopback bind addresses. Authenticated clients can list graph revisions at `/v1/repositories/<repository-uuid>/revisions` retrieve a snapshot at `/v1/repositories/<repository-uuid>/revisions/<revision-uuid>`, and restore it by `POST` to `.../revisions/<revision-uuid>/restore`, which commits a new revision and keeps history ([ADR 0014](decisions/0014-graph-revision-restore.md)). To use a browser client, explicitly allow its loopback origin with `CODIFIER_AGENT_ALLOWED_ORIGINS` as a comma-separated list. Source files are read locally by the agent and are not sent to an external service.
 
 ## Run the local web explorer
 

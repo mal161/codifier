@@ -266,4 +266,153 @@ describe("SQLite graph store", () => {
 
     expect(() => store.getGraph(repositoryId)).toThrow(StorageCorruptionError);
   });
+  it("restores an earlier revision as a new revision without erasing history", () => {
+    const databasePath = createTemporaryDatabasePath();
+    const store = openGraphStore(databasePath);
+    stores.push(store);
+    const initial = createSnapshot();
+    store.replaceGraph(initial);
+    store.replaceGraph(createSnapshot("updated"));
+    const [first, second] = store.listGraphRevisions(repositoryId);
+
+    const result = store.restoreGraphRevision(repositoryId, first!.id);
+
+    expect(result).toMatchObject({
+      status: "restored",
+      revision: {
+        sequence: 3,
+        parentRevisionId: second!.id,
+        restoredFromRevisionId: first!.id,
+        contentHash: first!.contentHash,
+        changeSummary: {
+          entities: { added: [], changed: [entityId], removed: [] },
+        },
+      },
+    });
+    expect(store.getGraph(repositoryId)).toEqual(initial);
+    store.close();
+    stores.pop();
+
+    const reopened = openGraphStore(databasePath);
+    stores.push(reopened);
+    const history = reopened.listGraphRevisions(repositoryId);
+    expect(history.map(({ sequence }) => sequence)).toEqual([1, 2, 3]);
+    expect(history.map(({ id }) => id).slice(0, 2)).toEqual([
+      first!.id,
+      second!.id,
+    ]);
+    expect(reopened.getGraph(repositoryId)).toEqual(initial);
+  });
+
+  it("does not add a revision when restoring the current graph", () => {
+    const store = openGraphStore(createTemporaryDatabasePath());
+    stores.push(store);
+    store.replaceGraph(createSnapshot());
+    const [current] = store.listGraphRevisions(repositoryId);
+
+    expect(store.restoreGraphRevision(repositoryId, current!.id)).toEqual({
+      status: "unchanged",
+      revision: current,
+    });
+    expect(store.listGraphRevisions(repositoryId)).toHaveLength(1);
+  });
+
+  it("returns null for revisions of another or unknown repository", () => {
+    const store = openGraphStore(createTemporaryDatabasePath());
+    stores.push(store);
+    store.replaceGraph(createSnapshot());
+    const [current] = store.listGraphRevisions(repositoryId);
+
+    expect(
+      store.restoreGraphRevision(
+        "00000000-0000-4000-8000-000000000000",
+        current!.id,
+      ),
+    ).toBeNull();
+    expect(
+      store.restoreGraphRevision(
+        repositoryId,
+        "00000000-0000-4000-8000-000000000001",
+      ),
+    ).toBeNull();
+  });
+
+  it("refuses to restore a tampered revision and keeps the current graph", () => {
+    const databasePath = createTemporaryDatabasePath();
+    const store = openGraphStore(databasePath);
+    stores.push(store);
+    store.replaceGraph(createSnapshot());
+    store.replaceGraph(createSnapshot("updated"));
+    const [first] = store.listGraphRevisions(repositoryId);
+
+    const tamperedDatabase = new BetterSqlite3(databasePath);
+    tamperedDatabase
+      .prepare(
+        "UPDATE graph_revisions SET snapshot_json = json_set(snapshot_json, '$.revision', 'forged') WHERE id = ?",
+      )
+      .run(first!.id);
+    tamperedDatabase.close();
+
+    expect(() => store.restoreGraphRevision(repositoryId, first!.id)).toThrow(
+      StorageCorruptionError,
+    );
+    expect(store.listGraphRevisions(repositoryId)).toHaveLength(2);
+    expect(store.getGraph(repositoryId)).toEqual(createSnapshot("updated"));
+  });
+
+  it("rolls back the revision and current graph when a write fails mid-transaction", () => {
+    const store = openGraphStore(createTemporaryDatabasePath());
+    stores.push(store);
+    store.replaceGraph(createSnapshot());
+    const before = store.listGraphRevisions(repositoryId);
+    const jobId = "6f0c3f53-8f43-4b8a-9d32-1f5b0a6f1d11";
+
+    // The job row is the transaction's final write; invalid JSON violates its
+    // CHECK constraint after the revision and graph rows were already written.
+    expect(() =>
+      store.replaceGraph(createSnapshot("updated"), {
+        id: jobId,
+        repositoryId,
+        status: "completed",
+        jobJson: "{not json",
+        requestJson: "{}",
+      }),
+    ).toThrow();
+
+    expect(store.listGraphRevisions(repositoryId)).toEqual(before);
+    expect(store.getGraph(repositoryId)).toEqual(createSnapshot());
+    expect(store.getAnalysisJob(jobId)).toBeNull();
+
+    store.replaceGraph(createSnapshot("updated"));
+    expect(
+      store.listGraphRevisions(repositoryId).map(({ sequence }) => sequence),
+    ).toEqual([1, 2]);
+  });
+
+  it("does not create duplicate revisions when a committed job is retried", () => {
+    const store = openGraphStore(createTemporaryDatabasePath());
+    stores.push(store);
+    store.replaceGraph(createSnapshot());
+    const retry = (id: string) => ({
+      id,
+      repositoryId,
+      status: "completed",
+      jobJson: JSON.stringify({ id, status: "completed" }),
+      requestJson: "{}",
+    });
+
+    store.replaceGraph(
+      createSnapshot("updated"),
+      retry("0c2d4f61-9c2e-4d6b-a8a4-6c3f2b9f4a01"),
+    );
+    store.replaceGraph(
+      createSnapshot("updated"),
+      retry("0c2d4f61-9c2e-4d6b-a8a4-6c3f2b9f4a02"),
+    );
+
+    expect(store.listGraphRevisions(repositoryId)).toHaveLength(2);
+    expect(
+      store.getAnalysisJob("0c2d4f61-9c2e-4d6b-a8a4-6c3f2b9f4a02"),
+    ).toMatchObject({ status: "completed" });
+  });
 });

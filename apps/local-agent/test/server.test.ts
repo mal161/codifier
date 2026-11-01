@@ -147,6 +147,55 @@ describe("local agent API", () => {
     expect(await snapshotResponse.json()).toEqual(createSnapshot());
   });
 
+  it("restores an earlier revision as a new revision through the API", async () => {
+    const { baseUrl } = await startTestServer();
+    const store = stores.at(-1)!;
+    store.replaceGraph(createSnapshot());
+    store.replaceGraph(createSnapshot("updated"));
+    const [first, second] = store.listGraphRevisions(repositoryId);
+    const restoreUrl = (revision: string) =>
+      `${baseUrl}/v1/repositories/${repositoryId}/revisions/${revision}/restore`;
+
+    const unauthenticated = await fetch(restoreUrl(first!.id), {
+      method: "POST",
+    });
+    expect(unauthenticated.status).toBe(401);
+
+    const response = await fetch(restoreUrl(first!.id), {
+      method: "POST",
+      headers: headers(),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: "restored",
+      revision: {
+        sequence: 3,
+        parentRevisionId: second!.id,
+        restoredFromRevisionId: first!.id,
+      },
+      graph: createSnapshot(),
+    });
+    expect(store.listGraphRevisions(repositoryId)).toHaveLength(3);
+
+    const repeated = await fetch(restoreUrl(first!.id), {
+      method: "POST",
+      headers: headers(),
+    });
+    expect(await repeated.json()).toMatchObject({ status: "unchanged" });
+    expect(store.listGraphRevisions(repositoryId)).toHaveLength(3);
+
+    const missing = await fetch(
+      restoreUrl("00000000-0000-4000-8000-000000000001"),
+      { method: "POST", headers: headers() },
+    );
+    expect(missing.status).toBe(404);
+    const invalid = await fetch(restoreUrl("not-a-uuid"), {
+      method: "POST",
+      headers: headers(),
+    });
+    expect(invalid.status).toBe(400);
+  });
+
   it("restores interrupted jobs as retryable failures after agent restart", async () => {
     const store = openGraphStore(":memory:");
     store.saveAnalysisJob({
@@ -576,9 +625,8 @@ describe("local agent API", () => {
       ),
     ).toBe(false);
     expect(
-      unmappedSnapshot.evidence.some(
-        (item: { description: string }) =>
-          item.description.includes("Developer mapped"),
+      unmappedSnapshot.evidence.some((item: { description: string }) =>
+        item.description.includes("Developer mapped"),
       ),
     ).toBe(false);
   });

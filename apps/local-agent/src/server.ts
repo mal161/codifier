@@ -251,7 +251,9 @@ export function createAgentServer(
       }
       const parsed = sourceFreshnessRequestSchema.safeParse(request.body);
       if (!parsed.success) {
-        return reply.code(400).send({ error: "invalid_source_freshness_request" });
+        return reply
+          .code(400)
+          .send({ error: "invalid_source_freshness_request" });
       }
       const snapshot = options.store.getGraph(repositoryId);
       if (!snapshot) {
@@ -414,6 +416,46 @@ export function createAgentServer(
         return reply.code(404).send({ error: "graph_revision_not_found" });
       }
       return snapshot;
+    },
+  );
+
+  app.post<{ Params: RepositoryParams & { revisionId: string } }>(
+    "/v1/repositories/:repositoryId/revisions/:revisionId/restore",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      const revisionId = parseRepositoryId(request.params.revisionId);
+      if (!repositoryId || !revisionId) {
+        return reply.code(400).send({ error: "invalid_revision_identifier" });
+      }
+      // An in-flight analysis would commit on top of the restored graph using a
+      // stale baseline, so restore waits until no job is active.
+      if (
+        [...analysisJobs.values()].some(
+          ({ value }) =>
+            value.repositoryId === repositoryId && isActiveJob(value.status),
+        )
+      ) {
+        return reply.code(409).send({
+          error: "analysis_already_running",
+          message:
+            "Wait for or cancel the running analysis before restoring a revision.",
+        });
+      }
+      const result = options.store.restoreGraphRevision(
+        repositoryId,
+        revisionId,
+      );
+      if (!result) {
+        return reply.code(404).send({ error: "graph_revision_not_found" });
+      }
+      const graph = options.store.getGraph(repositoryId);
+      if (!graph) {
+        throw new Error("The repository graph was unavailable after restore.");
+      }
+      if (result.status === "restored") {
+        events.emit("graph.updated", repositoryId, graph.revision);
+      }
+      return { status: result.status, revision: result.revision, graph };
     },
   );
 
@@ -587,7 +629,8 @@ export function createAgentServer(
         return reply.code(400).send({ error: "invalid_mapping_identifier" });
       }
       const snapshot = options.store.getGraph(repositoryId);
-      if (!snapshot) return reply.code(404).send({ error: "repository_not_found" });
+      if (!snapshot)
+        return reply.code(404).send({ error: "repository_not_found" });
       const mapping = snapshot.relationships.find(
         (relationship) =>
           relationship.sourceEntityId === componentId &&
@@ -606,7 +649,9 @@ export function createAgentServer(
       const updatedSnapshot: GraphSnapshot = {
         ...snapshot,
         relationships,
-        evidence: snapshot.evidence.filter((item) => referencedEvidenceIds.has(item.id)),
+        evidence: snapshot.evidence.filter((item) =>
+          referencedEvidenceIds.has(item.id),
+        ),
       };
       options.store.replaceGraph(updatedSnapshot);
       events.emit("graph.updated", repositoryId, updatedSnapshot.revision);

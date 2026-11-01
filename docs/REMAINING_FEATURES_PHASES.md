@@ -5,13 +5,13 @@ This plan reconciles the two supplied implementation specifications with the cur
 ## Current baseline verified in this worktree
 
 - `packages/analysis-core` performs bounded TypeScript/JavaScript syntax analysis and returns a replacement snapshot. It has identity reconciliation, repository-root and symlink checks, but no file watcher or changed-file analysis pipeline.
-- `packages/storage` keeps normalized current graph rows and appends validated SQLite snapshot revisions in the same transaction (ADR 0009). Authenticated routes list revisions and retrieve earlier snapshots; history UI/export and retention are not implemented.
+- `packages/storage` keeps normalized current graph rows and appends validated SQLite snapshot revisions in the same transaction (ADR 0009). Authenticated routes list revisions, retrieve earlier snapshots, and restore one as a new revision (ADR 0014); history UI/export and retention are not implemented.
 - Agent analysis job requests, progress, and outcomes now persist. On restart, queued/running jobs are marked failed with a retry message; resume-from-checkpoint and failure-injection verification remain unimplemented.
 - The local web app supports graph-to-source URI opening and explicit source-location lookup. Phase 4 adds a local-agent fingerprint check before enabling the VS Code link; there is still no VS Code extension or automatic background freshness monitoring.
 - Intended components and observed mappings exist. A general intended-vs-actual discrepancy review and documented exception lifecycle are not implemented.
 - Git metadata, basic local architecture rules, template catalog, and neighborhood map are present. They do not establish broader Git history, rule packs, marketplace, or full graph visualization support.
 - The current fixture named `react-express-workspace` is synthetic and uses the local stack; it is not the separate representative React/Express acceptance repository requested by the specification.
-- Root and nested `.gitignore` rules support common glob patterns and ordered negation; unsupported escaped/bracket-class patterns are diagnosed. Additive exclusion patterns are exposed in the API and web analysis form. Re-inclusion under an excluded ancestor remains prohibited, consistent with Git ignore behavior. Phase 1 code is in place; its focused tests still need to be run.
+- Root and nested `.gitignore` rules support common glob patterns and ordered negation; unsupported escaped/bracket-class patterns are diagnosed. Additive exclusion patterns are exposed in the API and web analysis form. Re-inclusion under an excluded ancestor remains prohibited, consistent with Git ignore behavior. Phase 1 code is in place and its focused analysis-core tests ran green on 2026-11-01 (Windows; the symlink fixture self-skips when the OS denies symlink creation).
 - Cloud sync is not implemented. Its inclusion in an MVP release remains conditional on the data policy and conflict decisions in the remaining-features specification.
 
 ## Phase sequence
@@ -43,7 +43,7 @@ This plan reconciles the two supplied implementation specifications with the cur
 
 **Exit gate:** inventory is deterministic under a recorded policy; out-of-root paths cannot be read; skipped items have reasons; range and mapping contracts are documented and covered by focused checks.
 
-### Phase 2 — Durable graph revisions and recoverable jobs (storage implemented; verification pending)
+### Phase 2 — Durable graph revisions and recoverable jobs (storage, restore, and failure-injection coverage implemented; export and retention pending)
 
 **Purpose:** implement accepted ADR 0004 before incremental analysis can mutate snapshots.
 
@@ -54,6 +54,8 @@ This plan reconciles the two supplied implementation specifications with the cur
 - Persist job requests, progress, and outcomes across restart; interrupted queued/running jobs are marked failed and can be safely retried from the last committed graph. Do not persist source contents in history.
 - Commit successful analysis job outcome atomically with its graph snapshot and revision; throttled progress checkpoints are advisory only.
 - Add migrations, export/recovery behavior, retention notes, and failure-injection coverage.
+- **Implemented:** restore commits a verified earlier snapshot as a new revision with `restored_from_revision_id`; an identical restore is a no-op. Storage tests cover ordering across reopen, tampered history, rollback of a mid-transaction constraint failure, and duplicate job retries ([ADR 0014](decisions/0014-graph-revision-restore.md)).
+- **Pending:** history export, a restore control in the clients, retention/pruning policy, and an agent-level test for the restore-while-analyzing `409`.
 
 **Exit gate:** restart and injected failures preserve revision ordering and graph validity; retries do not create duplicate semantic revisions; restore creates a new revision and does not erase history.
 

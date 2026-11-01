@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { Command } from "commander";
 import { graphSnapshotSchema } from "@codifier/contracts";
 import { openGraphStore } from "@codifier/storage";
+import { normalizeArgv } from "./argv.js";
 import { createAgentServer } from "./server.js";
 
 const defaultDatabasePath =
@@ -138,7 +139,7 @@ program
     },
   );
 
-program.parseAsync(process.argv).catch(reportError);
+program.parseAsync(normalizeArgv(process.argv)).catch(reportError);
 
 async function agentFetch(
   path: string,

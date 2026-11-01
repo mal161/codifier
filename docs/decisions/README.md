@@ -37,6 +37,8 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0013: Symlinks outside the analysis scope](0013-symlinks-out-of-analysis-scope.md) records that symlinks are not followed, are reported, and do not block persistence.
 
+[0014: Graph revision restore](0014-graph-revision-restore.md) records that restoring history commits a new, verified revision and never rewrites earlier ones.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?

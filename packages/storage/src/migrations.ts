@@ -95,6 +95,13 @@ const migrations: Migration[] = [
       `CREATE INDEX analysis_jobs_updated_at ON analysis_jobs(updated_at)`,
     ],
   },
+  {
+    id: "0005_graph_revision_restore",
+    statements: [
+      `ALTER TABLE graph_revisions
+        ADD COLUMN restored_from_revision_id TEXT REFERENCES graph_revisions(id)`,
+    ],
+  },
 ];
 
 export function applyMigrations(database: BetterSqlite3.Database): void {

@@ -28,6 +28,7 @@ export const graphRevisions = sqliteTable(
     contentHash: text("content_hash").notNull(),
     changeSummaryJson: text("change_summary_json").notNull(),
     snapshotJson: text("snapshot_json").notNull(),
+    restoredFromRevisionId: text("restored_from_revision_id"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (table) => [
