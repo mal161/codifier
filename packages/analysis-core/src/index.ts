@@ -64,6 +64,12 @@ export interface RepositoryAnalysisOptions {
   excludePatterns?: string[];
   respectGitignore?: boolean;
   previousSnapshot?: GraphSnapshot | null;
+  /**
+   * Reuses syntax trees and syntax diagnostics for files whose path and
+   * content hash are unchanged. Import resolution and identity are always
+   * recomputed, so output is identical with or without a cache.
+   */
+  parseCache?: ParseCache;
   signal?: AbortSignal;
   onProgress?: (progress: RepositoryAnalysisProgress) => void;
 }
@@ -130,6 +136,106 @@ export interface AnalysisReconciliation {
   removedFiles: string[];
   renamedFiles: Array<{ from: string; to: string }>;
   reason: string;
+  /** Files whose syntax tree came from the parse cache versus a fresh parse. */
+  parseReuse?: { reusedFiles: number; parsedFiles: number };
+}
+
+export interface ParseCacheOptions {
+  /** Upper bound on cached source text, in bytes. Default 32 MiB. */
+  maxSourceBytes?: number;
+  /** Upper bound on cached files. Default 20,000. */
+  maxEntries?: number;
+}
+
+/**
+ * In-memory, process-local cache of parsed files. It holds source text in
+ * memory only and is never persisted.
+ */
+export interface ParseCache {
+  readonly size: number;
+  readonly sourceBytes: number;
+  clear(): void;
+}
+
+interface ParseCacheEntry {
+  sourceFile: ts.SourceFile;
+  diagnostics: readonly ts.Diagnostic[];
+  sourceBytes: number;
+  path: string;
+}
+
+class ParseCacheStore implements ParseCache {
+  // Map iteration order is insertion order, so the first key is least recent.
+  private readonly entries = new Map<string, ParseCacheEntry>();
+  private readonly keyByPath = new Map<string, string>();
+  private bytes = 0;
+
+  constructor(
+    private readonly maxSourceBytes: number,
+    private readonly maxEntries: number,
+  ) {}
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  get sourceBytes(): number {
+    return this.bytes;
+  }
+
+  clear(): void {
+    this.entries.clear();
+    this.keyByPath.clear();
+    this.bytes = 0;
+  }
+
+  lookup(key: string): ParseCacheEntry | undefined {
+    const entry = this.entries.get(key);
+    if (entry) {
+      this.entries.delete(key);
+      this.entries.set(key, entry);
+    }
+    return entry;
+  }
+
+  store(key: string, entry: ParseCacheEntry): void {
+    // Only the latest content of a path is useful; drop older versions.
+    const previousKey = this.keyByPath.get(entry.path);
+    if (previousKey !== undefined) this.remove(previousKey);
+    if (entry.sourceBytes > this.maxSourceBytes) return;
+    while (
+      this.entries.size > 0 &&
+      (this.bytes + entry.sourceBytes > this.maxSourceBytes ||
+        this.entries.size >= this.maxEntries)
+    ) {
+      this.remove(this.entries.keys().next().value as string);
+    }
+    this.entries.set(key, entry);
+    this.keyByPath.set(entry.path, key);
+    this.bytes += entry.sourceBytes;
+  }
+
+  private remove(key: string): void {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.entries.delete(key);
+    if (this.keyByPath.get(entry.path) === key) this.keyByPath.delete(entry.path);
+    this.bytes -= entry.sourceBytes;
+  }
+}
+
+export function createParseCache(options: ParseCacheOptions = {}): ParseCache {
+  const maxSourceBytes = options.maxSourceBytes ?? 33_554_432;
+  const maxEntries = options.maxEntries ?? 20_000;
+  for (const [name, value] of Object.entries({ maxSourceBytes, maxEntries })) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RepositoryAnalysisError(
+        "invalid_analysis_options",
+        `${name} must be a positive safe integer.`,
+      );
+    }
+  }
+  return new ParseCacheStore(maxSourceBytes, maxEntries);
 }
 
 export interface SourceFreshnessResult {
@@ -230,6 +336,9 @@ interface InventoryFile {
   contents: string;
   contentHash: string;
   sourceFile: ts.SourceFile;
+  parseCacheKey: string;
+  /** Present when the syntax tree and diagnostics came from the cache. */
+  cachedDiagnostics?: readonly ts.Diagnostic[];
 }
 
 interface FileCandidate {
@@ -342,6 +451,17 @@ export async function analyzeRepository(
       );
     }
   }
+
+  if (
+    options.parseCache !== undefined &&
+    !(options.parseCache instanceof ParseCacheStore)
+  ) {
+    throw new RepositoryAnalysisError(
+      "invalid_analysis_options",
+      "parseCache must be created with createParseCache().",
+    );
+  }
+  const parseCache = options.parseCache as ParseCacheStore | undefined;
 
   const repositoryRoot = await resolveRepositoryRoot(options.repositoryRoot);
   throwIfCancelled(options.signal);
@@ -640,19 +760,27 @@ export async function analyzeRepository(
         options.signal,
       );
       totalBytesRead += byteLength;
-      const sourceFile = ts.createSourceFile(
-        candidate.absolutePath,
-        contents,
-        ts.ScriptTarget.Latest,
-        true,
-        scriptKindForPath(candidate.relativePath),
-      );
+      const contentHash = sha256(contents);
+      const scriptKind = scriptKindForPath(candidate.relativePath);
+      const parseCacheKey = `${scriptKind}\0${canonicalPath(candidate.absolutePath)}\0${contentHash}`;
+      const cached = parseCache?.lookup(parseCacheKey);
+      const sourceFile =
+        cached?.sourceFile ??
+        ts.createSourceFile(
+          candidate.absolutePath,
+          contents,
+          ts.ScriptTarget.Latest,
+          true,
+          scriptKind,
+        );
       files.push({
         ...candidate,
         byteLength,
         contents,
-        contentHash: sha256(contents),
+        contentHash,
         sourceFile,
+        parseCacheKey,
+        ...(cached ? { cachedDiagnostics: cached.diagnostics } : {}),
       });
     } catch (error) {
       if (error instanceof RepositoryAnalysisCancelledError) {
@@ -688,11 +816,31 @@ export async function analyzeRepository(
     completedFiles: 0,
     totalFiles: files.length,
   });
-  const syntacticDiagnostics = await getSyntacticDiagnostics(
-    files,
-    options.signal,
-  );
+  const filesToCheck = files.filter((file) => !file.cachedDiagnostics);
+  const syntacticDiagnostics = [
+    ...files.flatMap((file) => file.cachedDiagnostics ?? []),
+    ...(await getSyntacticDiagnostics(filesToCheck, options.signal)),
+  ];
   throwIfCancelled(options.signal);
+  if (parseCache) {
+    const freshByPath = new Map<string, ts.Diagnostic[]>(
+      filesToCheck.map((file) => [canonicalPath(file.absolutePath), []]),
+    );
+    for (const diagnostic of syntacticDiagnostics) {
+      if (diagnostic.file) {
+        freshByPath.get(canonicalPath(diagnostic.file.fileName))?.push(diagnostic);
+      }
+    }
+    for (const file of filesToCheck) {
+      parseCache.store(file.parseCacheKey, {
+        sourceFile: file.sourceFile,
+        diagnostics:
+          freshByPath.get(canonicalPath(file.absolutePath)) ?? [],
+        sourceBytes: file.byteLength,
+        path: canonicalPath(file.absolutePath),
+      });
+    }
+  }
   const diagnosticsByFile = new Map<string, ts.Diagnostic[]>();
   for (const diagnostic of syntacticDiagnostics) {
     const file = diagnostic.file;
@@ -1029,6 +1177,15 @@ export async function analyzeRepository(
       )
       .flatMap((diagnostic) => diagnostic.path ? [diagnostic.path] : []),
   );
+
+  const reusedFiles = files.length - filesToCheck.length;
+  reconciliation.parseReuse = {
+    reusedFiles,
+    parsedFiles: filesToCheck.length,
+  };
+  if (reconciliation.mode === "full-fallback" && reusedFiles > 0) {
+    reconciliation.reason = `Changed files were re-parsed and ${reusedFiles} unchanged file${reusedFiles === 1 ? "" : "s"} reused cached syntax trees; imports, exports, and identities were recomputed across the repository.`;
+  }
 
   const persistBlockers = summarizePersistBlockers(coverage, blockerExamples);
   return {
@@ -1763,6 +1920,7 @@ async function getSyntacticDiagnostics(
   signal: AbortSignal | undefined,
 ): Promise<ts.Diagnostic[]> {
   throwIfCancelled(signal);
+  if (files.length === 0) return [];
   const filesByPath = new Map(
     files.map((file) => [canonicalPath(file.absolutePath), file.sourceFile]),
   );

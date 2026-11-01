@@ -41,6 +41,8 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0015: Graph history export](0015-graph-history-export.md) records the verified JSON export format and what it excludes.
 
+[0016: In-memory parse cache](0016-in-memory-parse-cache.md) records reuse of unchanged syntax trees with whole-inventory re-resolution, and why parse results are not persisted.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?

@@ -60,7 +60,7 @@ This plan reconciles the two supplied implementation specifications with the cur
 
 **Exit gate:** restart and injected failures preserve revision ordering and graph validity; retries do not create duplicate semantic revisions; restore creates a new revision and does not erase history.
 
-### Phase 3 — Incremental analysis and reconciliation (change discovery implemented; selective re-analysis pending)
+### Phase 3 — Incremental analysis and reconciliation (parse reuse and clean-equivalence evidence implemented; file watcher deferred)
 
 **Purpose:** synchronize file changes while retaining identities and producing the same graph as a clean analysis.
 
@@ -68,7 +68,9 @@ This plan reconciles the two supplied implementation specifications with the cur
 
 - Add changed-file discovery (watcher as an optimization) for add, edit, delete, and rename; provide explicit full reconciliation.
 - **Implemented:** refresh reports classify additions, edits, removals, and uniquely evidenced renames; synchronous API and durable-job responses expose the classification, and the web explorer shows the full-reconciliation fallback.
-- **Implemented:** when changes are present, the analyzer explicitly runs a full rebuild so imports and re-exports are reconciled safely. It does not yet parse only affected files.
+- **Implemented:** the agent keeps an in-memory parse cache; only files whose path or content hash changed are re-parsed and syntax-checked, while import/export resolution, identity, and relationships are recomputed across the whole inventory so unchanged importers are re-resolved ([ADR 0016](decisions/0016-in-memory-parse-cache.md)). Reports and the web reconciliation card show parsed versus reused counts.
+- **Exit-gate evidence:** `packages/analysis-core/test/incremental.test.ts` asserts cached incremental output equals a clean pass (snapshot including evidence and ranges, diagnostics, coverage, reconciliation) for no-op, edit, deleted import target, addition, rename, tsconfig-only change, and cached syntax errors, and that unchanged file UUIDs are kept. No-op refresh adding no revision is covered by storage tests (ADR 0009) and the live agent check.
+- **Not implemented:** a file watcher (optional optimization); every refresh still reads and hashes all inventoried files, and the cache is empty after an agent restart.
 - Reanalyze affected inputs and invalidate dependent import/export resolutions where needed.
 - Preserve unchanged UUIDs; only preserve rename identity when evidence is unambiguous; report ambiguity.
 - Replace obsolete relationships atomically, surface removed/stale facts, and expose job progress/results in the UI.
@@ -152,7 +154,7 @@ Do not pull broad call-graph analysis, additional languages, AI explanations/pro
 ## Work sequencing notes
 
 - Phase 1's ignore and configurable exclusion behavior is implemented in analyzer, API, and web form; finish source-locator freshness and run its focused verification before Phase 2.
-- Phase 3 has started with change-set discovery and visible full fallback. Selective dependency invalidation, unchanged-input parse reuse, and incremental-versus-clean golden equivalence remain required before the phase exit gate.
+- Phase 3 has change-set discovery, unchanged-input parse reuse, whole-inventory re-resolution, and incremental-versus-clean equivalence tests. A file watcher remains an optional optimization.
 - Phases 4 and 5 can overlap after the source-location contract stabilizes, but Phase 6 depends on the applicable parts of both.
 - Phase 7 is blocked on the explicit data and conflict decisions, not on local offline MVP work.
 - The prior worktree contains unrelated uncommitted changes. Review those changes independently; do not fold them into these phases without confirming their intent.

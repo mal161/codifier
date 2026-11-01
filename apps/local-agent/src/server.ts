@@ -20,7 +20,9 @@ import {
 } from "@codifier/contracts";
 import {
   analyzeRepository,
+  createParseCache,
   preserveIntendedGraphItems,
+  type ParseCache,
   RepositoryAnalysisCancelledError,
   RepositoryAnalysisError,
   validateSourceFreshness,
@@ -85,6 +87,10 @@ export function createAgentServer(
   );
   const events = new EventEmitter();
   const analysisJobs = new Map<string, AnalysisJobRecord>();
+  // Process-local syntax-tree cache shared by every analysis this agent runs.
+  // Keys include the absolute path and content hash, so repositories never
+  // share entries. It holds source text in memory only; nothing is persisted.
+  const parseCache = createParseCache();
   const activeJobPromises = new Set<Promise<void>>();
 
   if (host !== "127.0.0.1") {
@@ -701,6 +707,7 @@ export function createAgentServer(
       try {
         const gitContext = await readGitContext(parsed.data.rootPath);
         const report = await analyzeRepository({
+          parseCache,
           repositoryId,
           repositoryRoot: parsed.data.rootPath,
           revision: parsed.data.revision ?? gitContext.commit,
@@ -753,6 +760,7 @@ export function createAgentServer(
     try {
       const gitContext = await readGitContext(parsed.data.rootPath);
       const report = await analyzeRepository({
+        parseCache,
         repositoryId,
         repositoryRoot: parsed.data.rootPath,
         revision: parsed.data.revision ?? gitContext.commit,
@@ -955,6 +963,7 @@ export function createAgentServer(
         options.store,
         events,
         app.log,
+        parseCache,
       ),
     );
     activeJobPromises.add(task);
@@ -981,6 +990,7 @@ async function executeAnalysisJob(
   store: GraphStore,
   events: EventEmitter,
   logger: FastifyInstance["log"],
+  parseCache: ParseCache,
 ): Promise<void> {
   if (record.controller.signal.aborted) {
     markJobCancelled(record.value);
@@ -993,6 +1003,7 @@ async function executeAnalysisJob(
     const previousSnapshot = store.getGraph(record.value.repositoryId);
     const gitContext = await readGitContext(repositoryRoot);
     const report = await analyzeRepository({
+      parseCache,
       repositoryId: record.value.repositoryId,
       repositoryRoot,
       revision: revision ?? gitContext.commit,

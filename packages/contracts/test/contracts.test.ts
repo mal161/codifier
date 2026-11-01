@@ -4,6 +4,7 @@ import {
   architectureTemplateCatalogSchema,
   analysisJobResultSchema,
   analysisJobSchema,
+  analysisReconciliationSchema,
   gitContextSchema,
   sourceLocatorSchema,
 } from "../src/index.js";
@@ -271,6 +272,44 @@ describe("sourceLocatorSchema invalid input", () => {
           start: { line: 8, column: 0 },
           end: { line: 7, column: 9 },
         },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("analysisReconciliationSchema", () => {
+  const reconciliation = {
+    mode: "full-fallback",
+    addedFiles: [],
+    changedFiles: ["src/a.ts"],
+    removedFiles: [],
+    renamedFiles: [],
+    reason: "Changed files were re-parsed.",
+  };
+
+  it("accepts reports with and without parse reuse counts", () => {
+    expect(analysisReconciliationSchema.parse(reconciliation)).toEqual(
+      reconciliation,
+    );
+    expect(
+      analysisReconciliationSchema.parse({
+        ...reconciliation,
+        parseReuse: { reusedFiles: 4, parsedFiles: 1 },
+      }).parseReuse,
+    ).toEqual({ reusedFiles: 4, parsedFiles: 1 });
+  });
+
+  it("rejects negative or unexpected parse reuse fields", () => {
+    expect(() =>
+      analysisReconciliationSchema.parse({
+        ...reconciliation,
+        parseReuse: { reusedFiles: -1, parsedFiles: 1 },
+      }),
+    ).toThrow();
+    expect(() =>
+      analysisReconciliationSchema.parse({
+        ...reconciliation,
+        parseReuse: { reusedFiles: 1, parsedFiles: 1, cachedBytes: 9 },
       }),
     ).toThrow();
   });

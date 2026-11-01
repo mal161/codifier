@@ -289,6 +289,13 @@ export const analysisReconciliationSchema = z
       z.object({ from: repositoryRelativePathSchema, to: repositoryRelativePathSchema }).strict(),
     ),
     reason: z.string().min(1),
+    parseReuse: z
+      .object({
+        reusedFiles: z.number().int().nonnegative(),
+        parsedFiles: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

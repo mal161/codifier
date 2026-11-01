@@ -1034,6 +1034,45 @@ describe("local agent API", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("reuses parsed files across analysis jobs in the same agent", async () => {
+    const { baseUrl } = await startTestServer();
+    const root = await mkdtemp(join(tmpdir(), "codifier-agent-parse-reuse-"));
+    temporaryDirectories.push(root);
+    await writeFile(
+      join(root, "index.ts"),
+      'export { value } from "./value";\n',
+    );
+    await writeFile(join(root, "value.ts"), "export const value = 1;\n");
+    const run = async () => {
+      const response = await fetch(
+        `${baseUrl}/v1/repositories/${repositoryId}/analysis-jobs`,
+        {
+          method: "POST",
+          headers: { ...headers(), "content-type": "application/json" },
+          body: JSON.stringify({ rootPath: root }),
+        },
+      );
+      expect(response.status).toBe(202);
+      return waitForJob(
+        baseUrl,
+        analysisJobSchema.parse(await response.json()),
+      );
+    };
+
+    const first = await run();
+    expect(first.result?.reconciliation?.parseReuse).toEqual({
+      reusedFiles: 0,
+      parsedFiles: 2,
+    });
+
+    await writeFile(join(root, "value.ts"), "export const value = 2;\n");
+    const second = await run();
+    expect(second.result?.reconciliation).toMatchObject({
+      changedFiles: ["value.ts"],
+      parseReuse: { reusedFiles: 1, parsedFiles: 1 },
+    });
+  });
+
   it("omits change summaries when an analysis job is not persisted", async () => {
     const { baseUrl } = await startTestServer();
     const root = await mkdtemp(join(tmpdir(), "codifier-agent-job-partial-"));

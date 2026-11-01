@@ -2074,6 +2074,15 @@ function ReconciliationCard({
           <div>Renamed: {reconciliation.renamedFiles.length}</div>
         </dl>
       )}
+      {reconciliation.parseReuse && reconciliation.mode !== "initial" && (
+        <p className="mt-2 text-[11px] leading-5 text-muted">
+          Parsed {reconciliation.parseReuse.parsedFiles} file
+          {reconciliation.parseReuse.parsedFiles === 1 ? "" : "s"}; reused{" "}
+          {reconciliation.parseReuse.reusedFiles} unchanged file
+          {reconciliation.parseReuse.reusedFiles === 1 ? "" : "s"} from this
+          agent session.
+        </p>
+      )}
     </section>
   );
 }
