@@ -4,6 +4,7 @@
   "description": "Navigate evidence-backed Codifier architecture graphs from VS Code using the local companion agent.",
   "version": "0.1.0",
   "publisher": "codifier-local",
+  "icon": "icon.png",
   "license": "MIT",
   "private": true,
   "type": "commonjs",

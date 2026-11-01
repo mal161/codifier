@@ -25,6 +25,9 @@ codifier/
 ├── .editorconfig
 ├── .gitignore
 ├── .npmrc
+├── assets/
+│   └── brand/
+│       └── codifier-logo.svg            # Logo source; extension icon and web favicon are rendered from it
 ├── .github/
 │   └── workflows/
 │       ├── checks.yml
