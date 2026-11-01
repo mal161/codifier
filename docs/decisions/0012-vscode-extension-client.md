@@ -27,4 +27,4 @@ The VS Code client needs repository graph lookup and exact navigation while pres
 
 - The user must connect explicitly and analyze a workspace before graph navigation.
 - The initial UI uses commands and Quick Picks; it does not provide a persistent graph tree or editor decorations.
-- The manifest declares an API floor for compatibility intent, but tested supported versions remain unclaimed until host verification.
+- The manifest declares an API floor for compatibility intent. Host and VSIX verification on Windows with VS Code 1.144.0 is recorded in [ADR 0019](0019-vscode-extension-host-verification.md); other versions and platforms remain unclaimed.

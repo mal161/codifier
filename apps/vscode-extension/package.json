@@ -59,7 +59,8 @@
   "scripts": {
     "lint": "eslint src test",
     "typecheck": "node --check src/agent.cjs && node --check src/extension.cjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:host": "node test/host/run.cjs"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.1.0"

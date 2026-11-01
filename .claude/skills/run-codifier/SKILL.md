@@ -69,6 +69,14 @@ pnpm --silent --filter @codifier/local-agent start -- graph history <repository-
 taskkill //PID $(grep -ao '"pid":[0-9]*' "$TEMP/codifier-smoke.log" | head -1 | cut -d: -f2) //T //F
 ```
 
+## Run: VS Code extension (Extension Host)
+
+```bash
+pnpm --filter codifier-vscode test:host
+```
+
+Launches the installed VS Code (`%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe`, or `VSCODE_EXECUTABLE`) with an isolated profile and a real agent on port 4197 (`CODIFIER_HOST_TEST_PORT` to change), runs `apps/vscode-extension/test/host/suite.cjs` inside the host, and ends with `PASS` or `FAIL`. A VS Code window is visible for about 30 seconds. To test the packaged extension, build the VSIX, install it with `code --extensions-dir <dir> --install-extension apps/vscode-extension/codifier-vscode-0.1.0.vsix`, then run `node apps/vscode-extension/test/host/run.cjs --extension-path <dir>/codifier-local.codifier-vscode-0.1.0`.
+
 ## Run (human path)
 
 Run the agent with `CODIFIER_AGENT_ALLOWED_ORIGINS=http://127.0.0.1:5173` and `pnpm --filter @codifier/local-agent start -- serve`, then `pnpm --filter @codifier/local-web dev` in a second terminal. Open `http://127.0.0.1:5173` and paste the token. Ctrl+C stops each one. The root `README.md` has the PowerShell variant.
@@ -90,6 +98,8 @@ This runs lint, typecheck and test through Turbo: 21 tasks across 7 packages, al
 - **`pnpm start -- <cmd> --opt`** works only from commit `1734b0d` on. Older CLIs read the forwarded `--` as the end of options.
 - **Playwright `TargetClosedError` after a blob download.** playwright-core 1.49 leaves an internal navigation promise pending and rejects it on close, which crashes the process before any cleanup. The driver navigates to `about:blank` after the download and ignores only that error.
 - **Accessibility audit artifacts look like real failures.** Smooth scrolling makes focus-position probes read off-screen coordinates, and a disabled button fading back in (`transition` + `disabled:opacity-45`) can be sampled mid-fade as low contrast. The a11y flow emulates reduced motion and the app honours it; if you see focus "obscured" by content far down the page, check `scrollY` in the report before fixing code.
+- **Extension Host suites must load from inside the extension under test.** Each extension gets its own `vscode` API object; stubbing the suite's copy does not affect the extension, so a real input box appears and the run waits forever. The runner copies the suite into an installed extension for `--extension-path`, the suite refuses to run from outside, and the runner stops a host after 180 s.
+- **Windows paths differ by form.** `os.tmpdir()` can return an 8.3 short path (`ALEXMW~1`) and VS Code reports a lower-case drive letter (`c:\`); compare resolved, case-insensitive paths.
 - **Git context reads "Uncommitted changes"** whenever this repository's working tree is dirty, because the fixture lives inside it. That is expected.
 
 ## Troubleshooting

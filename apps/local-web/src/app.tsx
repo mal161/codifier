@@ -2081,7 +2081,7 @@ function FindingSourceLocations({
       <ul className="mt-1 flex flex-wrap gap-1.5">
         {finding.sourceLocations.map((source) => {
           const { start, end } = source.range;
-          const label = `${source.repositoryRelativePath}:${start.line}:${start.column}`;
+          const label = `${source.repositoryRelativePath}:${start.line}:${start.column + 1}`;
           return (
             <li
               className="rounded bg-canvas px-2 py-1 font-mono text-[11px] text-ink"

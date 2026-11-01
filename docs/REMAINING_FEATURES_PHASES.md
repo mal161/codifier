@@ -99,7 +99,7 @@ Phase 4 remains in progress only for verification beyond automation: screen-read
 
 **Exit gate:** bidirectional navigation and drift scenarios work against the real agent API; stale links never silently redirect; exceptions are reviewable and reversible; accessibility findings are recorded and resolved or tracked.
 
-### Phase 5 — VS Code extension (initial client implemented; host and package verification pending)
+### Phase 5 — VS Code extension (client implemented; verified in a real Extension Host and from the installed VSIX on Windows; other platforms and older VS Code versions unverified)
 
 **Purpose:** make the IDE a client of the same local agent and graph.
 
@@ -113,11 +113,12 @@ Phase 4 remains in progress only for verification beyond automation: screen-read
 - Reuse agent contracts; do not add a second analyzer or direct repository scanner.
 - Document packaging and supported versions only after actual host runs.
 - **Complete:** `vsce` packaged `apps/vscode-extension/codifier-vscode-0.1.0.vsix`; generated Turbo artifacts are excluded. Rebuild with `pnpm --filter codifier-vscode exec vsce package --no-dependencies --allow-missing-repository`.
-- **Pending:** Extension Host launch/manual workflow, VSIX installation, and cross-platform verification. Manifest API floor is declared but not claimed as a tested supported-version range.
+- **Implemented:** `pnpm --filter codifier-vscode test:host` runs the real commands in an Extension Host of the installed VS Code against a real agent: unavailable agent, rejected token not stored, connect, status, lookup before analysis, durable-job analysis, current-file lookup, exact range selection, stale-source refusal, mismatched workspace, and token absence from messages, quick picks, profile files, workspace files, agent log, and host output (with a canary proving the scan works). The same suite passes against the VSIX installed with `code --install-extension` into an isolated extensions directory ([ADR 0019](decisions/0019-vscode-extension-host-verification.md)).
+- **Verified environment:** Windows 11 x64, VS Code 1.144.0. **Not verified:** macOS, Linux, and VS Code versions between the declared 1.90.0 floor and 1.144.0; a person has not yet walked the workflow by hand with real dialogs.
 
 **Exit gate:** extension-host coverage and a manual supported-platform workflow demonstrate auth, failure states, lookup, and exact range opening; no token appears in logs or URLs.
 
-Phase 5 remains in progress until those manual host/package checks are completed.
+Phase 5's exit gate is met for the verified environment above. A manual walkthrough with real dialogs and other platforms remain before any broader support claim.
 
 ### Phase 6 — Representative React/Express acceptance walkthrough
 

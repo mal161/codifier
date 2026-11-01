@@ -12,6 +12,14 @@ This extension is a client of the existing authenticated local agent. It does no
 
 The extension accepts only HTTP URLs on `localhost`, `127.0.0.1`, or `::1`. A workspace folder must match the folder previously analyzed before graph queries run. Authentication failures, unavailable agent, repository mismatch, stale source, and unresolved freshness are surfaced as user-visible messages. Tokens are sent only in the Authorization header.
 
-The package manifest declares a VS Code API floor of 1.90.0 to express the APIs it expects; that floor is not yet a manually verified supported-version claim. A local VSIX can be generated from the repository root with `pnpm --filter codifier-vscode exec vsce package --no-dependencies --allow-missing-repository`. Cross-platform Extension Host testing and installation verification have not yet been performed. The repository is licensed under the MIT License; see the root `LICENSE` file.
+## Extension Host tests
+
+`pnpm --filter codifier-vscode test:host` runs the commands inside a real Extension Host of the VS Code installed on this machine, against a real local agent, in an isolated profile (it opens a VS Code window for about 30 seconds). It checks an unavailable agent, a rejected token, connecting, lookup, analysis, exact range opening, stale-source refusal, a mismatched workspace folder, and that the token appears in no message, profile file, workspace file, agent log, or host output. Pass `-- --extension-path <installed extension folder>` to test an installed VSIX, and `--vscode <Code executable>` or `VSCODE_EXECUTABLE` if VS Code is not in the default Windows location. See `docs/decisions/0019-vscode-extension-host-verification.md` in the repository.
+
+## Packaging and supported versions
+
+Build the VSIX from the repository root with `pnpm --filter codifier-vscode exec vsce package --no-dependencies --allow-missing-repository`, and install it with `code --install-extension apps/vscode-extension/codifier-vscode-0.1.0.vsix`.
+
+Verified: Windows 11 x64 with VS Code 1.144.0, both from source and from the installed VSIX. The manifest's `engines.vscode` floor of 1.90.0 expresses the APIs the extension expects; versions between 1.90 and 1.144, and macOS and Linux, have not been verified. The repository is licensed under the MIT License; see the root `LICENSE` file.
 
 The extension has no added runtime package dependencies. Its agent adapter validates the bounded graph, job, and freshness fields it consumes and follows the same REST paths and request shapes as the local web client.

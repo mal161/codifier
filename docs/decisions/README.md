@@ -47,6 +47,8 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0018: Rule set 1.2.0](0018-rule-set-1-2-drift-conflicts-and-locations.md) records intent conflict checks, source locations on every finding, and the linear-time evaluation.
 
+[0019: VS Code Extension Host verification](0019-vscode-extension-host-verification.md) records the installed-VS-Code host test harness, VSIX verification, and the verified environment.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?
