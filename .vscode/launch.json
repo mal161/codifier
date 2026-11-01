@@ -1,17 +1,25 @@
 {
   "version": "0.2.0",
   "configurations": [
+
+    {
+      "name": "Run Windows Hermes",
+      "request": "launch",
+      "type": "reactnativedirect",
+      "cwd": "${workspaceFolder}",
+      "enableDebug": false,
+      "platform": "windows"
+    },
     {
       "name": "Run Codifier Extension Host",
       "type": "extensionHost",
       "request": "launch",
+      "runtimeExecutable": "${execPath}",
       "args": [
         "${workspaceFolder}",
         "--extensionDevelopmentPath=${workspaceFolder}/apps/vscode-extension"
       ],
-      "outFiles": [
-        "${workspaceFolder}/apps/vscode-extension/**/*.js"
-      ]
+      "outFiles": ["${workspaceFolder}/apps/vscode-extension/**/*.js"]
     }
   ]
 }

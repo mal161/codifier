@@ -1271,10 +1271,13 @@ async function inventoryRepository(
           .split(sep)
           .join("/");
 
+        // Policy exclusions are reported as diagnostics but are not skipped
+        // files: they are outside the analysis scope and must not block
+        // persistence of an otherwise complete pass.
         if (
           matchesExclusion(relativePath, excludePatterns, entry.isDirectory())
         ) {
-          coverage.skippedFiles += 1;
+          if (entry.isDirectory()) coverage.excludedDirectories += 1;
           reportDiagnostic({
             code: "user_excluded",
             severity: "warning",
@@ -1288,22 +1291,23 @@ async function inventoryRepository(
           ignoreRules.length > 0 &&
           isGitignored(relativePath, isDirectory, ignoreRules);
         if (ignoredByGit) {
-          coverage.skippedFiles += entry.isFile() ? 1 : 0;
           reportDiagnostic({
             code: "gitignored",
             severity: "warning",
             message: "Path excluded by a .gitignore rule.",
             path: relativePath,
           });
+          // Git cannot re-include paths beneath an ignored directory, so its
+          // contents are not walked; reconciliation matches this path as a
+          // prefix.
           if (isDirectory) coverage.excludedDirectories += 1;
-          else continue;
+          continue;
         }
 
+        // Symlinks are out of analysis scope (ADR 0013): an in-repository
+        // target is analyzed at its real path, and out-of-root targets must
+        // not be read, so the link itself does not block persistence.
         if (entry.isSymbolicLink()) {
-          if (!entry.isDirectory()) {
-            coverage.filesDiscovered += 1;
-            coverage.skippedFiles += 1;
-          }
           reportDiagnostic({
             code: "symlink_ignored",
             severity: "warning",

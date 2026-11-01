@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, rename, rm, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -388,7 +396,8 @@ describe("analyzeRepository", () => {
   it("applies nested gitignore rules and ordered negations", async () => {
     const root = await createTemporaryRepository();
     await mkdir(join(root, "nested"), { recursive: true });
-    await writeFile(join(root, ".gitignore"), "root-ignored.ts\n");
+    await writeFile(join(root, ".gitignore"), "root-ignored.ts\n*.log\n");
+    await writeFile(join(root, "debug.log"), "noise\n");
     await writeFile(
       join(root, "nested", ".gitignore"),
       "*.tmp.ts\n!keep.tmp.ts\n",
@@ -425,8 +434,11 @@ describe("analyzeRepository", () => {
           code: "gitignored",
           path: "nested/drop.tmp.ts",
         }),
+        expect.objectContaining({ code: "gitignored", path: "debug.log" }),
       ]),
     );
+    expect(report.coverage.skippedFiles).toBe(0);
+    expect(report.canPersist).toBe(true);
   });
 
   it("applies user exclusions without overriding hard safety directories", async () => {
@@ -459,6 +471,74 @@ describe("analyzeRepository", () => {
         expect.objectContaining({ code: "user_excluded", path: "generated" }),
       ]),
     );
+    expect(report.coverage.skippedFiles).toBe(0);
+    expect(report.canPersist).toBe(true);
+  });
+
+  it("does not walk gitignored directories", async () => {
+    const root = await createTemporaryRepository();
+    await mkdir(join(root, "out", "deep"), { recursive: true });
+    await writeFile(join(root, ".gitignore"), "out/\n");
+    await writeFile(join(root, "main.ts"), "export const visible = 1;\n");
+    for (let index = 0; index < 250; index += 1) {
+      await writeFile(join(root, "out", "deep", `file-${index}.ts`), "");
+    }
+
+    const report = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+    });
+
+    expect(
+      report.diagnostics.filter((diagnostic) => diagnostic.code === "gitignored"),
+    ).toEqual([expect.objectContaining({ path: "out" })]);
+    expect(report.coverage.excludedDirectories).toBe(1);
+    expect(report.diagnosticsTruncated).toBe(false);
+    expect(report.canPersist).toBe(true);
+  });
+
+  it("does not report newly gitignored directory contents as removed", async () => {
+    const root = await createTemporaryRepository();
+    await mkdir(join(root, "out"), { recursive: true });
+    await writeFile(join(root, "main.ts"), "export const visible = 1;\n");
+    await writeFile(join(root, "out", "a.ts"), "export const built = 1;\n");
+    const first = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+    });
+    await writeFile(join(root, ".gitignore"), "out/\n");
+
+    const second = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+      previousSnapshot: first.snapshot,
+    });
+
+    expect(second.reconciliation.removedFiles).not.toContain("out/a.ts");
+    expect(second.canPersist).toBe(true);
+  });
+
+  it("reports symlinked files without blocking persistence", async (context) => {
+    const root = await createTemporaryRepository();
+    await writeFile(join(root, "main.ts"), "export const visible = 1;\n");
+    try {
+      await symlink(join(root, "main.ts"), join(root, "alias.ts"), "file");
+    } catch (error) {
+      // Windows requires Developer Mode or elevation to create symlinks.
+      if ((error as NodeJS.ErrnoException).code === "EPERM") context.skip();
+      throw error;
+    }
+
+    const report = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+    });
+
+    expect(report.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "symlink_ignored", path: "alias.ts" }),
+    );
+    expect(report.coverage.skippedFiles).toBe(0);
+    expect(report.canPersist).toBe(true);
   });
 
   it("enforces the cumulative source-read limit", async () => {
