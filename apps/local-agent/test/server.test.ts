@@ -841,6 +841,12 @@ describe("local agent API", () => {
     expect(await analyze.json()).toMatchObject({
       persisted: false,
       coverage: { failedFiles: 1 },
+      persistBlockers: [
+        {
+          reason: "failed_files",
+          examples: [{ path: "broken.ts", code: "syntax_error" }],
+        },
+      ],
     });
     const get = await fetch(graphUrl, { headers: headers() });
     expect(await get.json()).toEqual(original);
@@ -983,6 +989,12 @@ describe("local agent API", () => {
       result: {
         persisted: false,
         coverage: { failedFiles: 1 },
+        persistBlockers: [
+          {
+            reason: "failed_files",
+            examples: [{ path: "broken.ts", code: "syntax_error" }],
+          },
+        ],
       },
     });
     expect(job.result).not.toHaveProperty("changeSummary");

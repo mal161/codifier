@@ -131,6 +131,60 @@ function assertAnalysisJob(value) {
   return value;
 }
 
+function persistBlockersOf(result) {
+  if (!isObject(result) || !Array.isArray(result.persistBlockers)) return [];
+  return result.persistBlockers.filter((blocker) =>
+    isObject(blocker) &&
+    typeof blocker.message === "string" &&
+    Array.isArray(blocker.examples));
+}
+
+function formatBlockerExample(example) {
+  if (!isObject(example) || typeof example.code !== "string") return null;
+  return typeof example.path === "string" ? `${example.path} (${example.code})` : example.code;
+}
+
+// Agents that predate persistence blockers send none; a stale agent process is
+// the likely cause, so say so instead of a reason-free failure.
+function describeIncompleteAnalysis(result) {
+  const blockers = persistBlockersOf(result);
+  if (blockers.length === 0) {
+    return "Analysis was incomplete; the saved graph was left unchanged. The agent did not report why, which usually means it is running older code: restart the local agent and analyze again.";
+  }
+  const reasons = blockers.map((blocker) => {
+    const examples = blocker.examples.slice(0, 3).map(formatBlockerExample).filter(Boolean);
+    return examples.length > 0 ? `${blocker.message} Examples: ${examples.join(", ")}.` : blocker.message;
+  });
+  return `Analysis was incomplete; the saved graph was left unchanged. ${reasons.join(" ")}`;
+}
+
+function formatAnalysisReport(result, rootPath) {
+  const lines = [`Codifier analysis of ${rootPath}`];
+  const coverage = isObject(result) && isObject(result.coverage) ? result.coverage : {};
+  lines.push(
+    `Saved: ${result?.persisted === true ? "yes" : "no"}`,
+    `Files: ${coverage.analyzedFiles ?? "?"} analyzed, ${coverage.skippedFiles ?? "?"} skipped, ${coverage.failedFiles ?? "?"} failed, ${coverage.unsupportedFiles ?? "?"} unsupported; inventory ${coverage.truncated ? "truncated" : "complete"}.`,
+  );
+  const blockers = persistBlockersOf(result);
+  if (blockers.length > 0) {
+    lines.push("", "Why the graph was not saved:");
+    for (const blocker of blockers) {
+      lines.push(`- ${blocker.message}`);
+      for (const example of blocker.examples.map(formatBlockerExample).filter(Boolean)) {
+        lines.push(`    ${example}`);
+      }
+    }
+  } else if (result?.persisted !== true) {
+    lines.push("", describeIncompleteAnalysis(result));
+  }
+  const diagnostics = Array.isArray(result?.diagnostics) ? result.diagnostics.filter(isObject) : [];
+  lines.push("", `Diagnostics (${diagnostics.length}${result?.diagnosticsTruncated ? ", truncated" : ""}):`);
+  for (const diagnostic of diagnostics) {
+    lines.push(`- ${diagnostic.severity} ${diagnostic.code}${diagnostic.path ? ` ${diagnostic.path}` : ""}: ${diagnostic.message}`);
+  }
+  return lines.join("\n");
+}
+
 function assertGraphSnapshot(value) {
   if (
     !isObject(value) ||
@@ -185,6 +239,8 @@ module.exports = {
   assertSourceFreshness,
   agentRequest,
   checkFreshness,
+  describeIncompleteAnalysis,
+  formatAnalysisReport,
   getGraph,
   normalizeAgentUrl,
   repositoryRelativePath,

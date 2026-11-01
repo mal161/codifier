@@ -5,6 +5,8 @@ const {
   agentRequest,
   assertAnalysisJob,
   checkFreshness,
+  describeIncompleteAnalysis,
+  formatAnalysisReport,
   getGraph,
   normalizeAgentUrl,
   repositoryRelativePath,
@@ -29,11 +31,13 @@ function activate(context) {
   status.tooltip = "Connect to the local Codifier agent";
   status.show();
   context.subscriptions.push(status);
+  const output = vscode.window.createOutputChannel("Codifier");
+  context.subscriptions.push(output);
 
   const handlers = {
     "codifier.connect": () => connect(vscode, context, status),
     "codifier.status": () => showStatus(vscode, context, status),
-    "codifier.analyzeWorkspace": () => analyzeWorkspace(vscode, context, status),
+    "codifier.analyzeWorkspace": () => analyzeWorkspace(vscode, context, status, output),
     "codifier.showArchitectureForCurrentFile": () => showArchitecture(vscode, context),
     "codifier.openSourceFromArchitecture": () => openSource(vscode, context),
   };
@@ -113,7 +117,7 @@ async function workspaceRoot(vscode) {
   return chosen.path;
 }
 
-async function analyzeWorkspace(vscode, context, status) {
+async function analyzeWorkspace(vscode, context, status, output) {
   try {
     const token = await tokenFor(context, vscode);
     if (!token) return;
@@ -147,7 +151,13 @@ async function analyzeWorkspace(vscode, context, status) {
         return job.result;
       },
     );
-    if (!result.persisted) throw new Error("Analysis was incomplete; the saved graph was left unchanged. Review the local agent diagnostics.");
+    output.clear();
+    output.appendLine(formatAnalysisReport(result, rootPath));
+    if (!result.persisted) {
+      const action = await vscode.window.showErrorMessage(describeIncompleteAnalysis(result), "Show Details");
+      if (action === "Show Details") output.show(true);
+      return;
+    }
     await context.globalState.update(bindingKey, { repositoryId, rootPath: path.resolve(rootPath) });
     status.text = "Codifier: Connected";
     await vscode.window.showInformationMessage(`Codifier analyzed this workspace. ${result.coverage.analyzedFiles} source files analyzed; graph ${repositoryId}.`);

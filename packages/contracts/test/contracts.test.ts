@@ -188,6 +188,34 @@ describe("analysisJobResultSchema", () => {
       analysisJobResultSchema.parse({ ...validResult, persisted: false }),
     ).toThrow();
   });
+
+  it("accepts persistence blockers only for unpersisted results", () => {
+    const blocked = {
+      coverage: { ...validResult.coverage, skippedFiles: 1 },
+      diagnostics: [],
+      diagnosticsTruncated: false,
+      persisted: false,
+      persistBlockers: [
+        {
+          reason: "skipped_files",
+          count: 1,
+          message: "1 file was skipped because of size limits, read errors, or unsafe paths.",
+          examples: [{ path: "debug.log", code: "file_too_large" }],
+        },
+      ],
+    };
+
+    expect(analysisJobResultSchema.parse(blocked)).toEqual(blocked);
+    expect(() =>
+      analysisJobResultSchema.parse({ ...blocked, persisted: true }),
+    ).toThrow();
+    expect(() =>
+      analysisJobResultSchema.parse({
+        ...blocked,
+        persistBlockers: [{ ...blocked.persistBlockers[0], reason: "unknown" }],
+      }),
+    ).toThrow();
+  });
 });
 
 describe("analysisJobSchema", () => {

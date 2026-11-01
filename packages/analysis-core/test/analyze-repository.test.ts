@@ -336,6 +336,13 @@ describe("analyzeRepository", () => {
       ]),
     );
     expect(report.canPersist).toBe(false);
+    expect(report.persistBlockers).toEqual([
+      expect.objectContaining({
+        reason: "failed_files",
+        count: 1,
+        examples: [{ path: "broken.ts", code: "syntax_error" }],
+      }),
+    ]);
     expect(validateGraphSnapshot(report.snapshot)).toEqual([]);
   });
 
@@ -362,6 +369,13 @@ describe("analyzeRepository", () => {
       expect.objectContaining({ code: "file_too_large", path: "large.ts" }),
     );
     expect(report.canPersist).toBe(false);
+    expect(report.persistBlockers).toEqual([
+      expect.objectContaining({
+        reason: "skipped_files",
+        count: 1,
+        examples: [{ path: "large.ts", code: "file_too_large" }],
+      }),
+    ]);
   });
 
   it("limits the inventory and identifies unresolved local imports", async () => {
@@ -379,6 +393,9 @@ describe("analyzeRepository", () => {
     });
     expect(limited.coverage.truncated).toBe(true);
     expect(limited.canPersist).toBe(false);
+    expect(limited.persistBlockers.map((blocker) => blocker.reason)).toEqual([
+      "truncated",
+    ]);
 
     const complete: RepositoryAnalysisReport = await analyzeRepository({
       repositoryId,
@@ -391,6 +408,33 @@ describe("analyzeRepository", () => {
       }),
     );
     expect(complete.canPersist).toBe(true);
+    expect(complete.persistBlockers).toEqual([]);
+  });
+
+  it("keeps persistence blocker examples when diagnostics are truncated", async () => {
+    const root = await createTemporaryRepository();
+    for (let index = 0; index < 210; index += 1) {
+      await writeFile(join(root, `asset-${String(index).padStart(3, "0")}.txt`), "");
+    }
+    await writeFile(join(root, "main.ts"), "export const ok = true;\n");
+    await writeFile(join(root, "zz-large.ts"), "x".repeat(64));
+
+    const report = await analyzeRepository({
+      repositoryId,
+      repositoryRoot: root,
+      maxFileBytes: 48,
+    });
+
+    expect(report.diagnosticsTruncated).toBe(true);
+    expect(report.diagnostics).not.toContainEqual(
+      expect.objectContaining({ path: "zz-large.ts" }),
+    );
+    expect(report.persistBlockers).toEqual([
+      expect.objectContaining({
+        reason: "skipped_files",
+        examples: [{ path: "zz-large.ts", code: "file_too_large" }],
+      }),
+    ]);
   });
 
   it("applies nested gitignore rules and ordered negations", async () => {

@@ -703,6 +703,7 @@ export function createAgentServer(
           diagnostics: report.diagnostics,
           diagnosticsTruncated: report.diagnosticsTruncated,
           persisted: report.canPersist,
+          persistBlockers: report.persistBlockers,
           reconciliation: report.reconciliation,
         };
       } catch (error) {
@@ -754,6 +755,7 @@ export function createAgentServer(
         diagnostics: report.diagnostics,
         diagnosticsTruncated: report.diagnosticsTruncated,
         persisted: report.canPersist,
+        persistBlockers: report.persistBlockers,
         reconciliation: report.reconciliation,
       };
     } catch (error) {
@@ -1025,6 +1027,7 @@ async function executeAnalysisJob(
       diagnostics: report.diagnostics,
       diagnosticsTruncated: report.diagnosticsTruncated,
       persisted,
+      persistBlockers: report.persistBlockers,
       reconciliation: report.reconciliation,
       ...(persisted
         ? {

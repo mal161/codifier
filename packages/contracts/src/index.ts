@@ -292,6 +292,29 @@ export const analysisReconciliationSchema = z
   })
   .strict();
 
+export const persistBlockerSchema = z
+  .object({
+    reason: z.enum([
+      "no_analyzed_files",
+      "failed_files",
+      "skipped_files",
+      "truncated",
+    ]),
+    count: z.number().int().nonnegative(),
+    message: z.string().min(1),
+    examples: z
+      .array(
+        z
+          .object({
+            path: repositoryRelativePathSchema.optional(),
+            code: z.string().min(1),
+          })
+          .strict(),
+      )
+      .max(10),
+  })
+  .strict();
+
 export const analysisJobResultSchema = z
   .object({
     coverage: z
@@ -309,11 +332,20 @@ export const analysisJobResultSchema = z
     diagnostics: z.array(analysisDiagnosticSchema),
     diagnosticsTruncated: z.boolean(),
     persisted: z.boolean(),
+    // Optional so job records written by earlier agents remain readable.
+    persistBlockers: z.array(persistBlockerSchema).optional(),
     reconciliation: analysisReconciliationSchema.optional(),
     changeSummary: analysisChangeSummarySchema.optional(),
   })
   .strict()
   .superRefine((result, context) => {
+    if (result.persisted && (result.persistBlockers?.length ?? 0) > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["persistBlockers"],
+        message: "A persisted analysis cannot report persistence blockers.",
+      });
+    }
     if (!result.persisted && result.changeSummary) {
       context.addIssue({
         code: "custom",
@@ -344,5 +376,6 @@ export const analysisJobSchema = z
 export type AnalysisJobPhase = z.infer<typeof analysisJobPhaseSchema>;
 export type AnalysisProgress = z.infer<typeof analysisProgressSchema>;
 export type AnalysisChangeSummary = z.infer<typeof analysisChangeSummarySchema>;
+export type PersistBlocker = z.infer<typeof persistBlockerSchema>;
 export type AnalysisJobResult = z.infer<typeof analysisJobResultSchema>;
 export type AnalysisJob = z.infer<typeof analysisJobSchema>;

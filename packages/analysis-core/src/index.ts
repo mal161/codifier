@@ -49,6 +49,7 @@ const excludedDirectoryNames = new Set([
   "node_modules",
 ]);
 const maxDiagnosticCount = 200;
+const maxPersistBlockerExamples = 5;
 const defaultMaxFileCount = 10_000;
 const defaultMaxFileBytes = 1_048_576;
 const defaultMaxTotalBytes = 104_857_600;
@@ -99,7 +100,27 @@ export interface RepositoryAnalysisReport {
   diagnostics: AnalysisDiagnostic[];
   diagnosticsTruncated: boolean;
   canPersist: boolean;
+  /** Why the pass may not replace the saved graph; empty when canPersist. */
+  persistBlockers: PersistBlocker[];
   reconciliation: AnalysisReconciliation;
+}
+
+export type PersistBlockerReason =
+  | "no_analyzed_files"
+  | "failed_files"
+  | "skipped_files"
+  | "truncated";
+
+export interface PersistBlockerExample {
+  path?: string;
+  code: string;
+}
+
+export interface PersistBlocker {
+  reason: PersistBlockerReason;
+  count: number;
+  message: string;
+  examples: PersistBlockerExample[];
 }
 
 export interface AnalysisReconciliation {
@@ -359,6 +380,30 @@ export async function analyzeRepository(
     }
     diagnostics.push(diagnostic);
   };
+  // Persistence blockers keep their own bounded examples so the reason a
+  // pass was not saved survives diagnostic truncation.
+  const blockerExamples: Record<"skipped" | "failed", PersistBlockerExample[]> =
+    { skipped: [], failed: [] };
+  const recordBlockedFile = (
+    kind: "skipped" | "failed",
+    path: string | undefined,
+    code: string,
+  ): void => {
+    if (kind === "skipped") coverage.skippedFiles += 1;
+    else coverage.failedFiles += 1;
+    const examples = blockerExamples[kind];
+    if (examples.length < maxPersistBlockerExamples) {
+      examples.push(path ? { path, code } : { code });
+    }
+  };
+  const reportSkippedFile = (diagnostic: AnalysisDiagnostic): void => {
+    recordBlockedFile("skipped", diagnostic.path, diagnostic.code);
+    reportDiagnostic(diagnostic);
+  };
+  const reportFailedFile = (diagnostic: AnalysisDiagnostic): void => {
+    recordBlockedFile("failed", diagnostic.path, diagnostic.code);
+    reportDiagnostic(diagnostic);
+  };
   const reportProgress = (progress: RepositoryAnalysisProgress): void =>
     options.onProgress?.(progress);
   reportProgress({
@@ -385,6 +430,8 @@ export async function analyzeRepository(
     repositoryRoot,
     coverage,
     reportDiagnostic,
+    reportSkippedFile,
+    reportFailedFile,
     () => {
       coverage.truncated = true;
     },
@@ -456,8 +503,7 @@ export async function analyzeRepository(
       });
       const remainingBytes = limits.maxTotalBytes - totalBytesRead;
       if (candidate.byteLength > limits.maxFileBytes) {
-        coverage.skippedFiles += 1;
-        reportDiagnostic({
+        reportSkippedFile({
           code: "workspace_package_manifest_too_large",
           severity: "warning",
           message:
@@ -465,8 +511,7 @@ export async function analyzeRepository(
           path: candidate.relativePath,
         });
       } else if (candidate.byteLength > remainingBytes) {
-        coverage.skippedFiles += 1;
-        reportDiagnostic({
+        reportSkippedFile({
           code: "analysis_size_limit",
           severity: "warning",
           message:
@@ -508,8 +553,7 @@ export async function analyzeRepository(
           if (error instanceof RepositoryAnalysisCancelledError) {
             throw error;
           }
-          coverage.skippedFiles += 1;
-          reportDiagnostic({
+          reportSkippedFile({
             code: "workspace_package_manifest_read_failed",
             severity: "warning",
             message:
@@ -552,8 +596,7 @@ export async function analyzeRepository(
 
     coverage.supportedFiles += 1;
     if (candidate.byteLength > limits.maxFileBytes) {
-      coverage.skippedFiles += 1;
-      reportDiagnostic({
+      reportSkippedFile({
         code: "file_too_large",
         severity: "warning",
         message: `File exceeds the ${limits.maxFileBytes}-byte analysis limit.`,
@@ -572,8 +615,7 @@ export async function analyzeRepository(
 
     const remainingBytes = limits.maxTotalBytes - totalBytesRead;
     if (candidate.byteLength > remainingBytes) {
-      coverage.skippedFiles += 1;
-      reportDiagnostic({
+      reportSkippedFile({
         code: "analysis_size_limit",
         severity: "warning",
         message:
@@ -616,8 +658,7 @@ export async function analyzeRepository(
       if (error instanceof RepositoryAnalysisCancelledError) {
         throw error;
       }
-      coverage.skippedFiles += 1;
-      reportDiagnostic({
+      reportSkippedFile({
         code:
           error instanceof FileLimitError
             ? "file_changed_during_analysis"
@@ -721,7 +762,7 @@ export async function analyzeRepository(
     const fileDiagnostics =
       diagnosticsByFile.get(canonicalPath(file.absolutePath)) ?? [];
     if (fileDiagnostics.length > 0) {
-      coverage.failedFiles += 1;
+      recordBlockedFile("failed", file.relativePath, "syntax_error");
       for (const diagnostic of fileDiagnostics) {
         const start = diagnostic.start ?? 0;
         const end = start + (diagnostic.length ?? 0);
@@ -989,18 +1030,61 @@ export async function analyzeRepository(
       .flatMap((diagnostic) => diagnostic.path ? [diagnostic.path] : []),
   );
 
+  const persistBlockers = summarizePersistBlockers(coverage, blockerExamples);
   return {
     snapshot: preservedSnapshot,
     coverage,
     diagnostics,
     diagnosticsTruncated,
     reconciliation,
-    canPersist:
-      coverage.analyzedFiles > 0 &&
-      coverage.failedFiles === 0 &&
-      coverage.skippedFiles === 0 &&
-      !coverage.truncated,
+    canPersist: persistBlockers.length === 0,
+    persistBlockers,
   };
+}
+
+function summarizePersistBlockers(
+  coverage: AnalysisCoverage,
+  examples: Record<"skipped" | "failed", PersistBlockerExample[]>,
+): PersistBlocker[] {
+  const blockers: PersistBlocker[] = [];
+  if (coverage.failedFiles > 0) {
+    blockers.push({
+      reason: "failed_files",
+      count: coverage.failedFiles,
+      message:
+        coverage.failedFiles === 1
+          ? "1 file or directory could not be analyzed."
+          : `${coverage.failedFiles} files or directories could not be analyzed.`,
+      examples: examples.failed,
+    });
+  }
+  if (coverage.skippedFiles > 0) {
+    blockers.push({
+      reason: "skipped_files",
+      count: coverage.skippedFiles,
+      message: `${coverage.skippedFiles === 1 ? "1 file was" : `${coverage.skippedFiles} files were`} skipped because of size limits, read errors, or unsafe paths.`,
+      examples: examples.skipped,
+    });
+  }
+  // Only reported on its own: failed or skipped files already explain an
+  // empty pass.
+  if (coverage.analyzedFiles === 0 && blockers.length === 0) {
+    blockers.push({
+      reason: "no_analyzed_files",
+      count: 0,
+      message: "No supported source files were found to analyze.",
+      examples: [],
+    });
+  }
+  if (coverage.truncated) {
+    blockers.push({
+      reason: "truncated",
+      count: coverage.filesDiscovered,
+      message: "The repository inventory reached its file limit before every file was examined.",
+      examples: [],
+    });
+  }
+  return blockers;
 }
 
 function reconcileFileChanges(
@@ -1207,6 +1291,8 @@ async function inventoryRepository(
   repositoryRoot: string,
   coverage: AnalysisCoverage,
   reportDiagnostic: (diagnostic: AnalysisDiagnostic) => void,
+  reportSkippedFile: (diagnostic: AnalysisDiagnostic) => void,
+  reportFailedFile: (diagnostic: AnalysisDiagnostic) => void,
   reportTruncation: () => void,
   maxFiles: number,
   signal: AbortSignal | undefined,
@@ -1238,13 +1324,12 @@ async function inventoryRepository(
       directory = await opendir(directoryPath);
     } catch {
       throwIfCancelled(signal);
-      reportDiagnostic({
+      reportFailedFile({
         code: "directory_read_failed",
         severity: "error",
         message: "A repository directory could not be read.",
         path: relative(repositoryRoot, directoryPath).split(sep).join("/"),
       });
-      coverage.failedFiles += 1;
       continue;
     }
 
@@ -1350,8 +1435,7 @@ async function inventoryRepository(
         try {
           const fileStat = await lstat(absolutePath);
           if (!fileStat.isFile()) {
-            coverage.skippedFiles += 1;
-            reportDiagnostic({
+            reportSkippedFile({
               code: "non_regular_file",
               severity: "warning",
               message: "Non-regular filesystem entries are not analyzed.",
@@ -1361,8 +1445,7 @@ async function inventoryRepository(
           }
           const canonicalFilePath = await realpath(absolutePath);
           if (!isWithinRoot(repositoryRoot, canonicalFilePath)) {
-            coverage.skippedFiles += 1;
-            reportDiagnostic({
+            reportSkippedFile({
               code: "path_outside_repository",
               severity: "warning",
               message:
@@ -1378,8 +1461,7 @@ async function inventoryRepository(
           });
         } catch {
           throwIfCancelled(signal);
-          coverage.skippedFiles += 1;
-          reportDiagnostic({
+          reportSkippedFile({
             code: "file_stat_failed",
             severity: "warning",
             message:
@@ -1390,13 +1472,12 @@ async function inventoryRepository(
       }
     } catch {
       throwIfCancelled(signal);
-      reportDiagnostic({
+      reportFailedFile({
         code: "directory_read_failed",
         severity: "error",
         message: "A repository directory could not be fully enumerated.",
         path: relative(repositoryRoot, directoryPath).split(sep).join("/"),
       });
-      coverage.failedFiles += 1;
     }
   }
 

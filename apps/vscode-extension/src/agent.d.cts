@@ -8,6 +8,8 @@ declare const agent: {
   ): Promise<unknown>;
   assertAnalysisJob(value: unknown): unknown;
   assertGraphSnapshot(value: unknown): unknown;
+  describeIncompleteAnalysis(result: unknown): string;
+  formatAnalysisReport(result: unknown, rootPath: string): string;
   normalizeAgentUrl(value: string): string;
   repositoryRelativePath(root: string, file: string): string;
   resolveSourcePath(root: string, relativePath: string): string;

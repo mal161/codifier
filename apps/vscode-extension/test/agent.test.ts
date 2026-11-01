@@ -6,6 +6,8 @@ const {
   agentRequest,
   assertAnalysisJob,
   assertGraphSnapshot,
+  describeIncompleteAnalysis,
+  formatAnalysisReport,
   normalizeAgentUrl,
   repositoryRelativePath,
   resolveSourcePath,
@@ -19,6 +21,8 @@ const {
   ) => Promise<unknown>;
   assertAnalysisJob: (value: unknown) => unknown;
   assertGraphSnapshot: (value: unknown) => unknown;
+  describeIncompleteAnalysis: (result: unknown) => string;
+  formatAnalysisReport: (result: unknown, rootPath: string) => string;
   normalizeAgentUrl: (value: string) => string;
   repositoryRelativePath: (root: string, file: string) => string;
   resolveSourcePath: (root: string, relativePath: string) => string;
@@ -88,6 +92,64 @@ describe("VS Code extension agent boundary", () => {
     expect(() => assertAnalysisJob({ id: "bad" })).toThrow("invalid analysis job");
     expect(() => assertGraphSnapshot({ schemaVersion: 1, entities: [] })).toThrow(
       "invalid graph snapshot",
+    );
+  });
+
+  const blockedResult = {
+    persisted: false,
+    coverage: {
+      analyzedFiles: 53,
+      skippedFiles: 1,
+      failedFiles: 0,
+      unsupportedFiles: 115,
+      truncated: false,
+    },
+    diagnostics: [
+      {
+        code: "file_too_large",
+        severity: "warning",
+        message: "File exceeds the 1048576-byte analysis limit.",
+        path: "debug.log",
+      },
+    ],
+    diagnosticsTruncated: true,
+    persistBlockers: [
+      {
+        reason: "skipped_files",
+        count: 1,
+        message:
+          "1 file was skipped because of size limits, read errors, or unsafe paths.",
+        examples: [{ path: "debug.log", code: "file_too_large" }],
+      },
+    ],
+  };
+
+  it("names the reasons an analysis was not saved", () => {
+    expect(describeIncompleteAnalysis(blockedResult)).toBe(
+      "Analysis was incomplete; the saved graph was left unchanged. 1 file was skipped because of size limits, read errors, or unsafe paths. Examples: debug.log (file_too_large).",
+    );
+  });
+
+  it("points to a stale agent when no reasons are reported", () => {
+    const { persistBlockers: _omitted, ...legacy } = blockedResult;
+    void _omitted;
+    expect(describeIncompleteAnalysis(legacy)).toContain(
+      "restart the local agent",
+    );
+  });
+
+  it("formats a full analysis report for the output channel", () => {
+    const report = formatAnalysisReport(blockedResult, "C:\\repo");
+
+    expect(report).toContain("Saved: no");
+    expect(report).toContain(
+      "53 analyzed, 1 skipped, 0 failed, 115 unsupported; inventory complete.",
+    );
+    expect(report).toContain("Why the graph was not saved:");
+    expect(report).toContain("    debug.log (file_too_large)");
+    expect(report).toContain("Diagnostics (1, truncated):");
+    expect(report).toContain(
+      "- warning file_too_large debug.log: File exceeds the 1048576-byte analysis limit.",
     );
   });
 });
