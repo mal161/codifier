@@ -53,3 +53,45 @@ jobs:
           name: acceptance-report-${{ matrix.os }}
           path: acceptance-report/
           if-no-files-found: ignore
+
+  vscode-extension:
+    name: VS Code ${{ matrix.vscode }} extension host (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # 1.90.0 is the manifest's declared floor (engines.vscode).
+        vscode: ["1.90.0", stable]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm (version from packageManager)
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Download VS Code ${{ matrix.vscode }}
+        id: vscode
+        shell: bash
+        run: |
+          exe=$(node apps/vscode-extension/test/host/download-vscode.cjs "${{ matrix.vscode }}" "$RUNNER_TEMP/vscode")
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+
+      - name: Extension Host suite (Linux, virtual display)
+        if: runner.os == 'Linux'
+        env:
+          # No desktop keyring on the runner; use VS Code's basic secret store.
+          CODIFIER_HOST_TEST_VSCODE_ARGS: --password-store=basic --disable-gpu
+        run: xvfb-run -a node apps/vscode-extension/test/host/run.cjs --vscode "${{ steps.vscode.outputs.exe }}"
+
+      - name: Extension Host suite
+        if: runner.os != 'Linux'
+        shell: bash
+        run: node apps/vscode-extension/test/host/run.cjs --vscode "${{ steps.vscode.outputs.exe }}"

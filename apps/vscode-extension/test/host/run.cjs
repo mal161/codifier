@@ -200,6 +200,10 @@ async function main() {
       "--skip-welcome",
       "--skip-release-notes",
       "--new-window",
+      // CI needs e.g. --password-store=basic on Linux without a keyring.
+      ...(process.env.CODIFIER_HOST_TEST_VSCODE_ARGS ?? "")
+        .split(/\s+/)
+        .filter(Boolean),
     ],
     { env, stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -257,6 +261,17 @@ async function main() {
     hostOutput.includes("HOST SUITE PASSED") &&
     leaks.length === 0 &&
     !hostLogLeak;
+  if (!passed) {
+    // CI has no access to the temporary directory; show the log tails.
+    const tail = (file) =>
+      fs.existsSync(file)
+        ? fs.readFileSync(file, "utf8").split(/\r?\n/).slice(-60).join("\n")
+        : "(missing)";
+    console.log("--- Extension Host output (last 60 lines) ---");
+    console.log(tail(path.join(tempRoot, "host.log")));
+    console.log("--- Agent log (last 60 lines) ---");
+    console.log(tail(agentLog));
+  }
   console.log(passed ? "PASS" : `FAIL (VS Code exit code ${exitCode})`);
   process.exitCode = passed ? 0 : 1;
 }
