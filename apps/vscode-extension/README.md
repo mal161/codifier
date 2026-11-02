@@ -20,6 +20,6 @@ The extension accepts only HTTP URLs on `localhost`, `127.0.0.1`, or `::1`. A wo
 
 Build the VSIX from the repository root with `pnpm --filter codifier-vscode exec vsce package --no-dependencies --allow-missing-repository`, and install it with `code --install-extension apps/vscode-extension/codifier-vscode-0.1.0.vsix`.
 
-Verified: Windows 11 x64 with VS Code 1.144.0, both from source and from the installed VSIX. The manifest's `engines.vscode` floor of 1.90.0 expresses the APIs the extension expects; versions between 1.90 and 1.144, and macOS and Linux, have not been verified. The repository is licensed under the MIT License; see the root `LICENSE` file.
+Verified: VS Code 1.90.0 (the declared `engines.vscode` floor) and 1.144.0 (stable at the time) on Linux, macOS, and Windows, in CI on every push to `main`; locally on Windows 11 x64 with VS Code 1.144.0 from source and from the installed VSIX. Versions between 1.90.0 and 1.144.0 are not individually tested.
 
 The extension has no added runtime package dependencies. Its agent adapter validates the bounded graph, job, and freshness fields it consumes and follows the same REST paths and request shapes as the local web client.

@@ -166,7 +166,7 @@ Set `CODIFIER_AGENT_URL` if the agent isn't on the default `http://127.0.0.1:414
 - **Limits per analysis:** 10,000 files, 1 MiB per file and 100 MiB in total. Larger inputs are reported rather than silently dropped.
 - **Re-analysis re-reads every file.** Only files whose content changed are re-parsed while the agent keeps running; imports are always re-resolved across the whole repository. There is no file watcher.
 - **Single machine.** There is no cloud sync, sharing or multi-user support.
-- **Verified platforms:** the agent, checks, and acceptance walkthrough run in CI on Linux, macOS, and Windows. The VS Code extension is verified only on Windows with VS Code 1.144.0. See [release readiness](docs/RELEASE_READINESS.md).
+- **Verified platforms:** the agent, checks, acceptance walkthrough, and VS Code extension (on VS Code 1.90.0 and 1.144.0) run in CI on Linux, macOS, and Windows. See [release readiness](docs/RELEASE_READINESS.md).
 - AI features described in the planning documents are not implemented.
 
 ## Developing Codifier

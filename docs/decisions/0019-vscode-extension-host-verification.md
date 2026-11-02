@@ -22,6 +22,6 @@ ADR 0012 deferred supported-version claims and VSIX release until Extension Host
 
 ## Consequences
 
-- Verified on Windows 11 x64 with VS Code 1.144.0, from source and from the VSIX installed with `code --install-extension` into an isolated extensions directory. The manifest's `engines.vscode` floor (`>=1.90.0`) remains a declared intent; versions between 1.90 and 1.144 and macOS/Linux are not verified.
+- Verified locally on Windows 11 x64 with VS Code 1.144.0, from source and from the VSIX installed with `code --install-extension` into an isolated extensions directory. Since 2026-11-02, CI also runs the suite on Linux, macOS, and Windows against VS Code 1.90.0 (the manifest floor) and current stable, using official builds downloaded by `test/host/download-vscode.cjs`; all six combinations pass. On Linux the run uses a virtual display, the basic secret store (no keyring on the runner), and the build's Chromium sandbox helper configured as setuid root. Versions between 1.90.0 and stable are not individually tested.
 - SecretStorage is observed to hold the token encrypted: no plaintext or UTF-16 copy appears in the profile.
 - Runs open a visible VS Code window for about 30 seconds.

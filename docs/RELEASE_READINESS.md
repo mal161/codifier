@@ -22,7 +22,7 @@ Phase status: Phases 0–6 meet their exit gates for the platforms below; Phase 
 |---|---|---|
 | Local agent, CLI, analysis, storage | Linux, macOS, Windows (x64 runners; macOS on GitHub's current image) | CI: `pnpm check` and `pnpm acceptance` ([ADR 0020](decisions/0020-continuous-integration.md)) |
 | Local web explorer | Windows, Microsoft Edge (Chromium) | `run-codifier` browser flows and WCAG audit; other browsers not tested |
-| VS Code extension | Windows 11 x64, VS Code 1.144.0, from source and from the installed VSIX | Extension Host suite ([ADR 0019](decisions/0019-vscode-extension-host-verification.md)) |
+| VS Code extension | VS Code 1.90.0 and 1.144.0 on Linux (x64, virtual display), macOS, and Windows; installed VSIX on Windows 11 x64 | Extension Host suite in CI and locally ([ADR 0019](decisions/0019-vscode-extension-host-verification.md)) |
 | Runtime | Node.js 24 (`engines`: `>=24 <25`), pnpm 12 | `engine-strict=true` |
 
 ## Security and boundary review
@@ -63,7 +63,7 @@ WCAG 2.2 Level A and AA review recorded in [ACCESSIBILITY_REVIEW.md](ACCESSIBILI
 - Analysis limits: 10,000 files, 1 MiB per file, 100 MiB per run; overflow is reported, never silently dropped.
 - Every refresh re-reads all files; only changed files are re-parsed while the agent runs; no file watcher.
 - Single machine; no sync, sharing, or multi-user features (ADR 0021). Rule-exception authors are self-attested.
-- VS Code extension verified only on Windows with VS Code 1.144.0; the declared floor of 1.90.0 is untested. Web explorer verified only in Chromium.
+- VS Code extension verified on VS Code 1.90.0 and 1.144.0 only (Linux, macOS, Windows); the installed VSIX only on Windows. Web explorer verified only in Chromium.
 - History import works only for repositories the agent does not have yet; prune and import are available through the API and CLI, not the web explorer. History is kept until someone prunes it; there is no automatic limit (ADR 0022).
 - Browser token pairing is manual (paste the token); tokens are not rotated automatically.
 - No standalone installers or signed packages; run from source.
