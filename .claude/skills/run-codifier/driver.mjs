@@ -485,6 +485,55 @@ function createA11yAudit(page) {
   }
 
   // 1.4.10 Reflow: no horizontal scrolling at 320 CSS px.
+  // 1.4.12 Text Spacing: apply the WCAG overrides and report text that is
+  // clipped only after them (already-truncated names are not new loss).
+  async function textSpacing() {
+    const measure = () =>
+      page.evaluate(() => {
+        const clipped = new Map();
+        for (const element of document.querySelectorAll("body *")) {
+          if (!element.textContent?.trim() || element.children.length > 0)
+            continue;
+          const style = getComputedStyle(element);
+          const hidesX = ["hidden", "clip"].includes(style.overflowX);
+          const hidesY = ["hidden", "clip"].includes(style.overflowY);
+          const x = hidesX && element.scrollWidth > element.clientWidth + 1;
+          const y = hidesY && element.scrollHeight > element.clientHeight + 1;
+          if (x || y) {
+            const path = [];
+            for (
+              let node = element;
+              node && node !== document.body;
+              node = node.parentElement
+            ) {
+              path.unshift(
+                `${node.tagName}:${[...(node.parentElement?.children ?? [])].indexOf(node)}`,
+              );
+            }
+            clipped.set(
+              path.join("/"),
+              `${element.tagName.toLowerCase()} "${element.textContent.trim().slice(0, 40)}"${x ? " (width)" : ""}${y ? " (height)" : ""}`,
+            );
+          }
+        }
+        return [...clipped];
+      });
+    const before = new Map(await measure());
+    const style = await page.addStyleTag({
+      content:
+        "* { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; } p { margin-bottom: 2em !important; }",
+    });
+    await page.waitForTimeout(100);
+    const after = await measure();
+    await style.evaluate((node) => node.remove());
+    return {
+      alreadyTruncated: before.size,
+      newlyClipped: after
+        .filter(([key]) => !before.has(key))
+        .map(([, label]) => label),
+    };
+  }
+
   async function reflow(name) {
     const original = page.viewportSize();
     await page.setViewportSize({ width: 320, height: 800 });
@@ -535,6 +584,7 @@ function createA11yAudit(page) {
         smallTargets: await smallTargets(),
         keyboard: walk ? await keyboardWalk() : null,
         reflow: reflowCheck ? await reflow(name) : null,
+        textSpacing: await textSpacing(),
       };
       report.states.push(entry);
       await page.screenshot({

@@ -141,7 +141,7 @@ export const graphSnapshotSchema: z.ZodType<GraphSnapshot> = z
 export const analyzeRepositoryRequestSchema = z
   .object({
     rootPath: z.string().min(1).max(4_096),
-    revision: z.string().min(1).nullable().optional(),
+    revision: z.string().min(1).max(256).nullable().optional(),
     excludePatterns: z.array(z.string().min(1).max(256)).max(256).optional(),
     respectGitignore: z.boolean().optional(),
   })

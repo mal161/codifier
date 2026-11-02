@@ -154,9 +154,9 @@ Set `CODIFIER_AGENT_URL` if the agent isn't on the default `http://127.0.0.1:414
 
 - **TypeScript and JavaScript only.** Analysis is syntax-level plus import resolution; it doesn't yet resolve types or calls across the project.
 - **Limits per analysis:** 10,000 files, 1 MiB per file and 100 MiB in total. Larger inputs are reported rather than silently dropped.
-- **Re-analysis is full,** not incremental: unchanged files are re-read each time.
+- **Re-analysis re-reads every file.** Only files whose content changed are re-parsed while the agent keeps running; imports are always re-resolved across the whole repository. There is no file watcher.
 - **Single machine.** There is no cloud sync, sharing or multi-user support.
-- **Not yet verified:** macOS and Linux, and VS Code versions other than the one used in development.
+- **Verified platforms:** the agent, checks, and acceptance walkthrough run in CI on Linux, macOS, and Windows. The VS Code extension is verified only on Windows with VS Code 1.144.0. See [release readiness](docs/RELEASE_READINESS.md).
 - AI features described in the planning documents are not implemented.
 
 ## Developing Codifier
@@ -187,6 +187,8 @@ Read [AGENTS.md](AGENTS.md) before contributing; it sets out the working convent
 - [Product brief](docs/PRODUCT_BRIEF.md): the problem, users and principles.
 - [User flows](docs/USER_FLOWS.md): the main workflows.
 - [Development setup](docs/DEVELOPMENT_SETUP.md): installation, agent options and the API.
+- [Release readiness](docs/RELEASE_READINESS.md): what the first local release claims, the evidence, and its limits.
+- [Accessibility review](docs/ACCESSIBILITY_REVIEW.md): WCAG 2.2 AA results.
 - [Acceptance walkthrough](docs/ACCEPTANCE_WALKTHROUGH.md): repeatable end-to-end run on a separate React + Express project (`pnpm acceptance`).
 - [VS Code extension guide](apps/vscode-extension/README.md).
 

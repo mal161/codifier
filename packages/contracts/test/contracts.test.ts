@@ -5,6 +5,7 @@ import {
   analysisJobResultSchema,
   analysisJobSchema,
   analysisReconciliationSchema,
+  analyzeRepositoryRequestSchema,
   reviewedArchitectureRuleEvaluationSchema,
   ruleExceptionCreateRequestSchema,
   ruleExceptionRevokeRequestSchema,
@@ -402,6 +403,23 @@ describe("rule exception contracts", () => {
             },
           },
         ],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("analyzeRepositoryRequestSchema", () => {
+  it("bounds the revision label", () => {
+    expect(
+      analyzeRepositoryRequestSchema.parse({
+        rootPath: "/repo",
+        revision: "a".repeat(64),
+      }).revision,
+    ).toHaveLength(64);
+    expect(() =>
+      analyzeRepositoryRequestSchema.parse({
+        rootPath: "/repo",
+        revision: "a".repeat(257),
       }),
     ).toThrow();
   });

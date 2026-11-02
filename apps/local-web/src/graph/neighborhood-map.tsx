@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -94,8 +94,19 @@ function NeighborhoodFlow({
     setEdges(neighborhood.edges);
   }, [neighborhood, setEdges, setNodes]);
 
+  // WCAG 4.1.2: React Flow renders its controls panel as a <div> with an
+  // aria-label but no role, so assistive technology may ignore the name.
+  // The library offers no role prop; give the panel a group role directly.
+  const flowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    flowRef.current
+      ?.querySelector(".react-flow__controls")
+      ?.setAttribute("role", "group");
+  });
+
   return (
     <ReactFlow
+      ref={flowRef}
       aria-label="Interactive relationship graph"
       edges={edges}
       fitView

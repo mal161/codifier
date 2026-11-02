@@ -28,6 +28,7 @@ Not performed: screen-reader testing (NVDA, JAWS, VoiceOver, TalkBack), speech-i
 | A7 | 2.5.8 Target Size (Minimum) | "Dismiss message" control was 48×20 px; attribution link 47×14 px. | Dismiss gets `min-h-6`; attribution link padded to 24 px. | scripted target check |
 | A8 | 2.5.3 Label in Name | Header home link name "Codifier codebase map home" did not contain its visible text; "Copy location" and "Open in VS Code" names did not contain theirs as a phrase. | Visible text now starts each accessible name; decorative logo mark hidden from assistive technology. | axe `label-content-name-mismatch`: 0 |
 | A9 | 4.1.2 Name, Role, Value | Disabled "Open in VS Code" `<a>` without `href` had no role, so its label was not reliably exposed. | `role="link"` with `aria-disabled` while unavailable. | axe (no longer reported) |
+| A11 | 4.1.2 Name, Role, Value | React Flow's controls panel had `aria-label` on a `<div>` without a role (axe "needs review"), and the library offers no role prop. | The panel is given `role="group"` after render. | axe: no longer reported |
 | A10 | 2.3.3 (AAA, advisory) | Smooth scrolling and transitions ignored the reduced-motion preference. | `motion-safe:scroll-smooth` and a reduced-motion reset for transitions and animations. | stable repeated audits under reduced motion |
 
 ## Criterion results (WCAG 2.2 Level A and AA)
@@ -50,7 +51,7 @@ Status values: **Pass** (automated or scripted evidence), **Pass (inspection)** 
 | 1.4.5 Images of Text | N/A | None. |
 | 1.4.10 Reflow | Fixed | A5. Rules and Marketplace already passed. |
 | 1.4.11 Non-text Contrast | Fixed | A4. Focus rings use `forest` (≥ 7:1). Card and divider borders are decorative and keep the lighter `line` color. |
-| 1.4.12 Text Spacing | Needs testing | Not tested with the text-spacing override; truncated single-line names (`truncate`) may clip under increased letter spacing. |
+| 1.4.12 Text Spacing | Pass | With the WCAG overrides applied (line height 1.5, paragraph spacing 2em, letter spacing 0.12em, word spacing 0.16em), no text is newly clipped in any audited state. The 1–4 single-line names per state truncated with an ellipsis are truncated before the override; their full text is available in the entity details panel. |
 | 1.4.13 Content on Hover or Focus | Pass (inspection) | Only native `title` tooltips; no author hover popups. |
 | 2.1.1 Keyboard | Pass | Every control on the audited paths is reachable by Tab (11–35 stops per state) including Save/Cancel in the exception form. Graph nodes are focusable; selecting them by keyboard is provided by the equivalent Browse list. |
 | 2.1.2 No Keyboard Trap | Pass | Each Tab walk completed without a trap. |
@@ -85,12 +86,12 @@ Status values: **Pass** (automated or scripted evidence), **Pass (inspection)** 
 | 3.3.4 Error Prevention (Legal, Financial, Data) | Pass (inspection) | Not legal or financial; destructive-looking actions (restore, revoke) use an explicit confirm step and are reversible by design. |
 | 3.3.7 Redundant Entry | Pass (inspection) | The reviewer name is remembered across exception forms within the page. |
 | 3.3.8 Accessible Authentication (Minimum) | Pass (inspection) | The token field allows paste and password managers; no cognitive test. |
-| 4.1.2 Name, Role, Value | Fixed / Needs AT testing | A9. React Flow's controls panel puts `aria-label` on a `<div>` without a role (axe "needs review"); the library offers no role prop. Its buttons are individually labelled. |
+| 4.1.2 Name, Role, Value | Fixed | A9, A11. |
 | 4.1.3 Status Messages | Pass (inspection) | Status messages use `role="status"` (errors `role="alert"`) in a live region without moving focus. |
 
 ## Open items
 
-1. 1.4.12 Text Spacing: run the text-spacing override on the explorer and decide whether truncated names need a tooltip or wrapping.
-2. Screen-reader passes on NVDA + Edge and VoiceOver + Safari for the analyze, rules-exception, and restore flows.
-3. React Flow controls group name (4.1.2 needs review): revisit if the library adds a role prop, or wrap the controls in an app-owned labelled group.
-4. Keep the audit current: re-run `--flow a11y` for UI changes and record new results here.
+1. Screen-reader passes on NVDA + Edge and VoiceOver + Safari for the analyze, rules-exception, dependency, and restore flows.
+2. Keep the audit current: re-run `--flow a11y` for UI changes and record new results here.
+
+Updated 2026-11-02 (Phase 8): 1.4.12 tested and passing; React Flow controls naming fixed.

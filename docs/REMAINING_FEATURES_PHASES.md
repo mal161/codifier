@@ -147,7 +147,9 @@ Phase 5's exit gate is met for the verified environment above. A manual walkthro
 
 **Exit gate:** offline-to-online, duplicate retry, out-of-order, simultaneous edit, authorization, tenant-isolation, and service-outage scenarios pass without silent overwrite or source upload outside policy.
 
-### Phase 8 — Release quality and support evidence
+### Phase 8 — Release quality and support evidence (complete for the scoped local release)
+
+**Status (2026-11-02):** security and boundary review, accessibility closure (except assistive-technology testing), dependency audit and fixes, regression run, supported-platform matrix, and explicit limitations are recorded in [RELEASE_READINESS.md](RELEASE_READINESS.md).
 
 **Purpose:** close release blockers without expanding into deferred product scope.
 
