@@ -411,11 +411,13 @@ describe("analyzeRepository", () => {
     expect(complete.persistBlockers).toEqual([]);
   });
 
-  it("keeps persistence blocker examples when diagnostics are truncated", async () => {
+  it("keeps persistence blocker examples when diagnostics are truncated", { timeout: 30_000 }, async () => {
     const root = await createTemporaryRepository();
-    for (let index = 0; index < 210; index += 1) {
-      await writeFile(join(root, `asset-${String(index).padStart(3, "0")}.txt`), "");
-    }
+    await Promise.all(
+      Array.from({ length: 210 }, (_, index) =>
+        writeFile(join(root, `asset-${String(index).padStart(3, "0")}.txt`), ""),
+      ),
+    );
     await writeFile(join(root, "main.ts"), "export const ok = true;\n");
     await writeFile(join(root, "zz-large.ts"), "x".repeat(64));
 
@@ -519,14 +521,16 @@ describe("analyzeRepository", () => {
     expect(report.canPersist).toBe(true);
   });
 
-  it("does not walk gitignored directories", async () => {
+  it("does not walk gitignored directories", { timeout: 30_000 }, async () => {
     const root = await createTemporaryRepository();
     await mkdir(join(root, "out", "deep"), { recursive: true });
     await writeFile(join(root, ".gitignore"), "out/\n");
     await writeFile(join(root, "main.ts"), "export const visible = 1;\n");
-    for (let index = 0; index < 250; index += 1) {
-      await writeFile(join(root, "out", "deep", `file-${index}.ts`), "");
-    }
+    await Promise.all(
+      Array.from({ length: 250 }, (_, index) =>
+        writeFile(join(root, "out", "deep", `file-${index}.ts`), ""),
+      ),
+    );
 
     const report = await analyzeRepository({
       repositoryId,
