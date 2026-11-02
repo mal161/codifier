@@ -57,7 +57,17 @@ async function main() {
   fs.writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
 
   // tar (GNU on Linux, bsdtar on macOS and Windows) extracts .tar.gz and .zip.
-  const extracted = spawnSync("tar", ["-xf", archive, "-C", root], {
+  // On Windows use System32's bsdtar: Git Bash's GNU tar may come first on
+  // PATH, cannot read zip files, and treats "D:" as a remote host.
+  const tar =
+    process.platform === "win32"
+      ? path.join(
+          process.env.SystemRoot ?? "C:\\Windows",
+          "System32",
+          "tar.exe",
+        )
+      : "tar";
+  const extracted = spawnSync(tar, ["-xf", archive, "-C", root], {
     stdio: ["ignore", "ignore", "inherit"],
   });
   if (extracted.status !== 0) throw new Error("Extracting VS Code failed.");

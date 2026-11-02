@@ -84,6 +84,15 @@ jobs:
           exe=$(node apps/vscode-extension/test/host/download-vscode.cjs "${{ matrix.vscode }}" "$RUNNER_TEMP/vscode")
           echo "exe=$exe" >> "$GITHUB_OUTPUT"
 
+      - name: Configure the Chromium sandbox helper (Linux)
+        if: runner.os == 'Linux'
+        # An extracted archive lacks the setuid root helper that a packaged
+        # VS Code install sets up; configure it instead of disabling the sandbox.
+        run: |
+          helper="$(dirname "${{ steps.vscode.outputs.exe }}")/chrome-sandbox"
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
+
       - name: Extension Host suite (Linux, virtual display)
         if: runner.os == 'Linux'
         env:
