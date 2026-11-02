@@ -135,7 +135,9 @@ Phase 5's exit gate is met for the verified environment above. A manual walkthro
 
 **Exit gate:** a reviewer can repeat the walkthrough from documented setup and observe every assertion using the local agent and real analyzed files. Met on Windows 11 x64 (41/41 in three consecutive runs); macOS/Linux runs are not yet recorded.
 
-### Phase 7 — Conditional cloud synchronization
+### Phase 7 — Conditional cloud synchronization (deferred out of release scope)
+
+**Decision (2026-11-02, [ADR 0021](decisions/0021-defer-cloud-sync-intent-only-scope.md)):** cloud sync is deferred out of the first release. When it is built, only developer-authored intent syncs (components, mappings, intended dependencies, exceptions; never source or the observed graph), and stale edits are rejected and resolved manually. No Phase 7 code is in scope.
 
 **Purpose:** add optional remote sync only after local revisions and authorization boundaries are stable.
 
@@ -151,7 +153,7 @@ Phase 5's exit gate is met for the verified environment above. A manual walkthro
 
 **Work:** security and boundary review; accessibility closure; supported OS/editor packaging; operational/setup docs; regression review; release evidence and explicit limitations.
 
-**Exit gate:** Phases 0–6 pass. Phase 7 passes only if cloud sync is selected as release scope. No MVP claim is made while graph integrity, identity, exact navigation, offline operation, or the Phase 6 walkthrough is incomplete.
+**Exit gate:** Phases 0–6 pass. Phase 7 is not selected as release scope (ADR 0021), so it does not gate the release. No MVP claim is made while graph integrity, identity, exact navigation, offline operation, or the Phase 6 walkthrough is incomplete.
 
 ## Deferred scope
 

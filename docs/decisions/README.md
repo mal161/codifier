@@ -51,13 +51,15 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0020: Continuous integration](0020-continuous-integration.md) records the GitHub Actions matrix (Linux, macOS, Windows) for checks and the acceptance walkthrough.
 
+[0021: Defer cloud sync](0021-defer-cloud-sync-intent-only-scope.md) records that sync is out of the first release and, when built, syncs intent only and rejects stale edits.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?
 2. Which TypeScript/JavaScript constructs and React/Express conventions are supported initially?
 3. What repository inventory rules apply to ignore files, generated/vendor content, symlinks, and oversized files?
 4. What snapshot retention, backup/export, and full recovery policy is appropriate beyond the initial SQLite revision/job history?
-5. What sync event schema, workspace identity, conflict, retention, export, and deletion rules apply?
+5. Cloud sync is deferred (ADR 0021), with intent-only scope and reject-stale conflicts decided. Sync event schema, workspace identity, retention, export, and deletion remain open for when sync is selected.
 6. What token lifecycle and browser pairing/Host/Origin rules protect local REST/WebSockets?
 7. Is an AI provider part of the first release? If so, what data may be sent and under what opt-in?
 8. What cloud provider/identity and supported OS/runtime versions are chosen?

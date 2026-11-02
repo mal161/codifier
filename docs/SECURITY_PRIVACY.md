@@ -71,7 +71,7 @@ Future data classification, lineage, retention, residency, access governance, an
 
 ## Open decisions before remote processing
 
-- Which graph metadata/events may synchronize, and what workspace identity, conflict, retention, export, and deletion rules apply?
+- Decided (ADR 0021): cloud sync is deferred; when built, only developer-authored intent may synchronize and stale edits are rejected for manual resolution. Workspace identity, retention, export, and deletion rules remain open.
 - Which local-agent token lifecycle and explicit browser pairing mechanism will be used?
 - Which AI providers and local models, if any, are supported?
 - Is a bring-your-own-key flow, a hosted provider proxy, or both appropriate?
