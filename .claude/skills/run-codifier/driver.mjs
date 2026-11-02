@@ -30,7 +30,7 @@ const flag = (name, fallback) => {
 };
 const keep = args.includes("--keep");
 const flow = flag("--flow", "all");
-if (!["all", "history", "exceptions", "a11y"].includes(flow)) {
+if (!["all", "history", "exceptions", "dependencies", "a11y"].includes(flow)) {
   throw new Error(
     `--flow must be all, history, exceptions, or a11y (got ${flow}).`,
   );
@@ -42,7 +42,9 @@ const out = resolve(
 mkdirSync(out, { recursive: true });
 const isWindows = process.platform === "win32";
 const agentUrl = `http://127.0.0.1:${agentPort}`;
-const webUrl = "http://127.0.0.1:5173";
+// --web-port lets the driver run beside a developer's own dev server on 5173.
+const webPort = Number(flag("--web-port", "5173"));
+const webUrl = `http://127.0.0.1:${webPort}`;
 const token = randomBytes(32).toString("base64url");
 const fixture = join(
   repoRoot,
@@ -155,7 +157,7 @@ async function launchServers() {
   }
   if (await isServing(webUrl)) {
     throw new Error(
-      `Something already answers on ${webUrl} (Vite uses strictPort). Stop it first.`,
+      `Something already answers on ${webUrl} (Vite uses strictPort). Pass --web-port <free port> or stop it.`,
     );
   }
   const database = join(
@@ -177,7 +179,10 @@ async function launchServers() {
   });
   log(`agent listening at ${agentUrl} (database ${database})`);
 
-  const web = start("web", "pnpm --filter @codifier/local-web dev");
+  const web = start(
+    "web",
+    `pnpm --filter @codifier/local-web exec vite --host 127.0.0.1 --strictPort --port ${webPort}`,
+  );
   await waitFor("Vite to serve", async () => {
     if (web.child.exitCode !== null)
       throw new Error(`Vite exited:\n${web.output()}`);
@@ -257,6 +262,10 @@ async function driveHistoryFlow(repositoryId) {
       }
       if (flow === "exceptions") return;
       await page.getByRole("button", { name: "Explore" }).click();
+      if (flow === "dependencies" || flow === "all") {
+        await driveDependencyFlow(page, shot);
+      }
+      if (flow === "dependencies") return;
 
       const panel = page.getByRole("region", { name: "Revision history" });
       await panel
@@ -573,6 +582,36 @@ async function driveA11yFlow(page, a11y) {
   const file = join(out, "a11y-report.json");
   writeFileSync(file, `${JSON.stringify(a11y.report, null, 2)}\n`);
   log(`a11y report written to ${file}`);
+}
+
+async function driveDependencyFlow(page, shot) {
+  await page.fill("#intended-component-name", "Driver persistence");
+  await page.getByRole("button", { name: "Create intended component" }).click();
+  await page.getByText(/^Intended component created/).waitFor();
+  await page.getByRole("button", { name: /^Driver component/ }).click();
+  await page.getByText("Driver component depends on").waitFor();
+  await page.getByText(/^No intended dependencies yet/).waitFor();
+
+  await page
+    .getByLabel("Add dependency on")
+    .selectOption({ label: "Driver persistence" });
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page
+    .getByText('"Driver component" now depends on "Driver persistence".')
+    .waitFor();
+  const remove = page.getByRole("button", {
+    name: "Remove dependency on Driver persistence",
+  });
+  await remove.waitFor();
+  log("declared an intended dependency from the explorer");
+  await shot("7-dependency-added");
+
+  await remove.click();
+  await page
+    .getByText(/^Removed the dependency from "Driver component"/)
+    .waitFor();
+  await page.getByText(/^No intended dependencies yet/).waitFor();
+  log("removed the intended dependency");
 }
 
 async function driveExceptionFlow(page, shot) {

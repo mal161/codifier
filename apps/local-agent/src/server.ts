@@ -17,6 +17,7 @@ import {
   analyzeRepositoryRequestSchema,
   graphSnapshotSchema,
   installArchitectureTemplateRequestSchema,
+  intendedComponentDependencyRequestSchema,
   intendedComponentMappingRequestSchema,
   intendedComponentRequestSchema,
   sourceFreshnessRequestSchema,
@@ -850,6 +851,140 @@ export function createAgentServer(
       if (!mapping) return reply.code(404).send({ error: "mapping_not_found" });
       const relationships = snapshot.relationships.filter(
         (relationship) => relationship.id !== mapping.id,
+      );
+      const referencedEvidenceIds = new Set([
+        ...snapshot.entities.flatMap((entity) => entity.evidenceIds),
+        ...relationships.flatMap((relationship) => relationship.evidenceIds),
+      ]);
+      const updatedSnapshot: GraphSnapshot = {
+        ...snapshot,
+        relationships,
+        evidence: snapshot.evidence.filter((item) =>
+          referencedEvidenceIds.has(item.id),
+        ),
+      };
+      options.store.replaceGraph(updatedSnapshot);
+      events.emit("graph.updated", repositoryId, updatedSnapshot.revision);
+      return updatedSnapshot;
+    },
+  );
+
+  app.post<{ Params: IntendedComponentParams }>(
+    "/v1/repositories/:repositoryId/intended-components/:componentId/dependencies",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      const componentId = parseRepositoryId(request.params.componentId);
+      if (!repositoryId || !componentId) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_intended_dependency_identifier" });
+      }
+      const parsed = intendedComponentDependencyRequestSchema.safeParse(
+        request.body,
+      );
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_intended_dependency",
+          issues: parsed.error.issues.map(({ path, message }) => ({
+            path,
+            message,
+          })),
+        });
+      }
+      const targetId = parsed.data.targetComponentId;
+      if (targetId === componentId) {
+        return reply.code(400).send({
+          error: "invalid_intended_dependency",
+          message: "A component cannot depend on itself.",
+        });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      const isIntendedComponent = (id: string) =>
+        snapshot.entities.find(
+          (entity) =>
+            entity.id === id &&
+            entity.kind === "component" &&
+            entity.state === "intended",
+        );
+      const source = isIntendedComponent(componentId);
+      const target = isIntendedComponent(targetId);
+      if (!source || !target) {
+        return reply.code(404).send({ error: "intended_component_not_found" });
+      }
+      const existing = snapshot.relationships.some(
+        (relationship) =>
+          relationship.sourceEntityId === componentId &&
+          relationship.targetEntityId === targetId &&
+          relationship.type === "DEPENDS_ON" &&
+          relationship.state === "intended",
+      );
+      if (existing) return snapshot;
+
+      const evidenceId = randomUUID();
+      const updatedSnapshot: GraphSnapshot = {
+        ...snapshot,
+        evidence: [
+          ...snapshot.evidence,
+          {
+            id: evidenceId,
+            origin: "developer",
+            description: `Developer declared that intended component "${source.name}" depends on "${target.name}".`,
+          },
+        ],
+        relationships: [
+          ...snapshot.relationships,
+          {
+            id: randomUUID(),
+            sourceEntityId: componentId,
+            targetEntityId: targetId,
+            type: "DEPENDS_ON",
+            state: "intended",
+            evidenceIds: [evidenceId],
+          },
+        ],
+      };
+      options.store.replaceGraph(updatedSnapshot);
+      events.emit("graph.updated", repositoryId, updatedSnapshot.revision);
+      return updatedSnapshot;
+    },
+  );
+
+  app.delete<{
+    Params: IntendedComponentParams & { targetComponentId: string };
+  }>(
+    "/v1/repositories/:repositoryId/intended-components/:componentId/dependencies/:targetComponentId",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      const componentId = parseRepositoryId(request.params.componentId);
+      const targetId = parseRepositoryId(request.params.targetComponentId);
+      if (!repositoryId || !componentId || !targetId) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_intended_dependency_identifier" });
+      }
+      const snapshot = options.store.getGraph(repositoryId);
+      if (!snapshot) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      const removed = new Set(
+        snapshot.relationships
+          .filter(
+            (relationship) =>
+              relationship.sourceEntityId === componentId &&
+              relationship.targetEntityId === targetId &&
+              relationship.type === "DEPENDS_ON" &&
+              relationship.state === "intended",
+          )
+          .map((relationship) => relationship.id),
+      );
+      if (removed.size === 0) {
+        return reply.code(404).send({ error: "intended_dependency_not_found" });
+      }
+      const relationships = snapshot.relationships.filter(
+        (relationship) => !removed.has(relationship.id),
       );
       const referencedEvidenceIds = new Set([
         ...snapshot.entities.flatMap((entity) => entity.evidenceIds),

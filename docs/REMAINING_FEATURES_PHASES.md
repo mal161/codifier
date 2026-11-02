@@ -120,7 +120,7 @@ Phase 4 remains in progress only for verification beyond automation: screen-read
 
 Phase 5's exit gate is met for the verified environment above. A manual walkthrough with real dialogs and other platforms remain before any broader support claim.
 
-### Phase 6 — Representative React/Express acceptance walkthrough
+### Phase 6 — Representative React/Express acceptance walkthrough (implemented; verified on Windows)
 
 **Purpose:** prove the complete local MVP on a separate, representative project.
 
@@ -130,7 +130,10 @@ Phase 5's exit gate is met for the verified environment above. A manual walkthro
 - Script/document repository registration, clean analysis, graph exploration, exact navigation in both directions, source edit, incremental update, stable identity, drift finding, and offline use.
 - Preserve expected assertions and captured outcomes; do not preseed graph results or substitute mocks.
 
-**Exit gate:** a reviewer can repeat the walkthrough from documented setup and observe every assertion using the local agent and real analyzed files.
+- **Implemented:** `fixtures/acceptance/react-express-shop` (React + TypeScript client, Express + TypeScript server, shared contracts behind a `@shared/*` alias, stated intent, one deliberate drift) and `pnpm acceptance`, which registers it as its own Git repository, runs a real agent with an offline guard, and checks 41 assertions: clean analysis, graph exploration including Express routes, navigation in both directions, intent declaration, the drift finding with its exact source line, a source edit, stale-then-current freshness, incremental update with parse reuse, stable UUIDs, drift resolution, no-op refresh, and no network beyond loopback. Expected assertions and the captured outcome are in [ACCEPTANCE_WALKTHROUGH.md](ACCEPTANCE_WALKTHROUGH.md).
+- **Implemented:** intended component dependencies can be declared and removed through the agent (`POST`/`DELETE .../intended-components/<id>/dependencies`), which the walkthrough uses, and from the web explorer's Intended architecture panel; previously they could only be written by replacing the whole graph.
+
+**Exit gate:** a reviewer can repeat the walkthrough from documented setup and observe every assertion using the local agent and real analyzed files. Met on Windows 11 x64 (41/41 in three consecutive runs); macOS/Linux runs are not yet recorded.
 
 ### Phase 7 — Conditional cloud synchronization
 

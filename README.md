@@ -187,6 +187,7 @@ Read [AGENTS.md](AGENTS.md) before contributing; it sets out the working convent
 - [Product brief](docs/PRODUCT_BRIEF.md): the problem, users and principles.
 - [User flows](docs/USER_FLOWS.md): the main workflows.
 - [Development setup](docs/DEVELOPMENT_SETUP.md): installation, agent options and the API.
+- [Acceptance walkthrough](docs/ACCEPTANCE_WALKTHROUGH.md): repeatable end-to-end run on a separate React + Express project (`pnpm acceptance`).
 - [VS Code extension guide](apps/vscode-extension/README.md).
 
 **How it works**

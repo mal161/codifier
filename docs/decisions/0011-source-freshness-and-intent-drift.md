@@ -14,6 +14,7 @@ Saved source ranges can outlive the file revision they describe. Opening an unve
 - The web client requires a successful current result before enabling the VS Code source link. It does not automatically redirect a stale location to a similarly named symbol or a renamed file.
 - Built-in drift checks compare intended component `DEPENDS_ON` relationships with actual `IMPORTS`, `REEXPORTS`, or `DEPENDS_ON` edges whose endpoints have explicit `MAPS_TO` links. Unmatched results are evidence-backed review prompts. Missing mappings and partial analysis can limit coverage; findings are not defect or compliance claims.
 - Developer mappings remain reversible through an explicit removal action. Removal deletes only the mapping relationship and evidence no longer referenced by any graph item.
+- Intended component dependencies follow the same pattern: declared through the agent with developer evidence (idempotent, no self-dependency) and removed explicitly, deleting only unreferenced evidence.
 
 ## Alternatives considered
 

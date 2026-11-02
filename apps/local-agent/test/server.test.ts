@@ -751,6 +751,81 @@ describe("local agent API", () => {
     ]);
   });
 
+  it("declares and removes intended component dependencies reversibly", async () => {
+    const { baseUrl } = await startTestServer();
+    const store = stores.at(-1)!;
+    const original = createSnapshot();
+    const api = "d1a1d2e3-7f6a-4a5b-8c9d-0123456789ab";
+    const domain = "d2a1d2e3-7f6a-4a5b-8c9d-0123456789ab";
+    const component = (id: string, name: string) => ({
+      ...original.entities[0]!,
+      id,
+      kind: "component" as const,
+      name,
+      state: "intended" as const,
+    });
+    store.replaceGraph({
+      ...original,
+      entities: [
+        ...original.entities,
+        component(api, "API"),
+        component(domain, "Domain"),
+      ],
+    });
+    const url = (from: string) =>
+      `${baseUrl}/v1/repositories/${repositoryId}/intended-components/${from}/dependencies`;
+    const post = (from: string, body: unknown) =>
+      fetch(url(from), {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    expect((await post(api, { targetComponentId: api })).status).toBe(400);
+    expect((await post(api, { targetComponentId: entityId })).status).toBe(404);
+    expect((await post(api, { target: domain })).status).toBe(400);
+
+    const created = await post(api, { targetComponentId: domain });
+    expect(created.status).toBe(200);
+    const dependencies = () =>
+      store
+        .getGraph(repositoryId)!
+        .relationships.filter((item) => item.type === "DEPENDS_ON");
+    expect(dependencies()).toMatchObject([
+      { sourceEntityId: api, targetEntityId: domain, state: "intended" },
+    ]);
+    const evidenceId = dependencies()[0]!.evidenceIds[0]!;
+    expect(
+      store
+        .getGraph(repositoryId)!
+        .evidence.find((item) => item.id === evidenceId),
+    ).toMatchObject({ origin: "developer" });
+
+    // Idempotent: declaring it again adds nothing.
+    await post(api, { targetComponentId: domain });
+    expect(dependencies()).toHaveLength(1);
+
+    const removed = await fetch(`${url(api)}/${domain}`, {
+      method: "DELETE",
+      headers: headers(),
+    });
+    expect(removed.status).toBe(200);
+    expect(dependencies()).toHaveLength(0);
+    expect(
+      store
+        .getGraph(repositoryId)!
+        .evidence.some((item) => item.id === evidenceId),
+    ).toBe(false);
+    expect(
+      (
+        await fetch(`${url(api)}/${domain}`, {
+          method: "DELETE",
+          headers: headers(),
+        })
+      ).status,
+    ).toBe(404);
+  });
+
   it("validates the architecture rule repository and requires a saved graph", async () => {
     const { baseUrl } = await startTestServer();
     const invalidRepositoryId = await fetch(

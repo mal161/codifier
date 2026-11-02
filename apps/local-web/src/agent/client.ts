@@ -309,6 +309,45 @@ export async function createIntendedComponent(
   return parsed.data;
 }
 
+/** Declares (`add`) or removes an intended dependency between components. */
+export async function setIntendedDependency(
+  baseUrl: string,
+  token: string,
+  repositoryId: string,
+  componentId: string,
+  targetComponentId: string,
+  action: "add" | "remove",
+  fetcher: typeof fetch = fetch,
+): Promise<GraphSnapshot> {
+  if (![repositoryId, componentId, targetComponentId].every(isRepositoryId)) {
+    throw new Error("Repository and component IDs must be valid UUIDs.");
+  }
+  if (componentId === targetComponentId) {
+    throw new Error("A component cannot depend on itself.");
+  }
+  const base = `/v1/repositories/${encodeURIComponent(repositoryId)}/intended-components/${encodeURIComponent(componentId)}/dependencies`;
+  const response = await request(
+    baseUrl,
+    token,
+    action === "add"
+      ? base
+      : `${base}/${encodeURIComponent(targetComponentId)}`,
+    action === "add"
+      ? {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ targetComponentId }),
+        }
+      : { method: "DELETE" },
+    fetcher,
+  );
+  const parsed = graphSnapshotSchema.safeParse(response);
+  if (!parsed.success) {
+    throw new Error("The agent returned an invalid graph snapshot.");
+  }
+  return parsed.data;
+}
+
 export async function mapEntityToIntendedComponent(
   baseUrl: string,
   token: string,

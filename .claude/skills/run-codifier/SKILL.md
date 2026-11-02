@@ -47,7 +47,8 @@ It prints one line per step and ends with `PASS - screenshots in <dir>` (exit 0)
 |---|---|
 | `--out <dir>` | artifact directory (default: a new temp dir) |
 | `--agent-port <n>` | agent port (default 4198; avoids a developer agent on 4141) |
-| `--flow <all, history, exceptions, a11y>` | which browser flows to run (default `all`; exceptions run first because the restore removes the seeded component). `a11y` runs the WCAG 2.2 AA audit instead (see below) |
+| `--flow <all, history, exceptions, dependencies, a11y>` | which browser flows to run (default `all`: exceptions, then intended dependencies, then history; exceptions run first because the restore removes the seeded component). `a11y` runs the WCAG 2.2 AA audit instead (see below) |
+| `--web-port <n>` | port for the driver's own Vite server (default 5173). Use it when your own `local-web dev` is already running on 5173 |
 | `--keep` | after PASS, leave both servers running and print the token and repository UUID; Ctrl+C stops them |
 | `HEADED=1` | show the browser window |
 | `BROWSER_CHANNEL` | Playwright channel; default `msedge` on Windows, else `chromium` |
@@ -107,5 +108,5 @@ This runs lint, typecheck and test through Turbo: 21 tasks across 7 packages, al
 - **`error: too many arguments for 'serve'. Expected 0 arguments but got 4`**: the CLI predates the `--` fix. Update, or drop the `--`.
 - **`codifier: listen EADDRINUSE: address already in use 127.0.0.1:<port>`**: another agent holds the port (see Gotchas). Pass `--agent-port`, or stop it by PID tree.
 - **Browser console: `blocked by CORS policy ... No 'Access-Control-Allow-Origin' header`**, or a preflight `403 {"error":"origin_not_allowed"}`: the agent was started without `CODIFIER_AGENT_ALLOWED_ORIGINS=http://127.0.0.1:5173`, or a different agent answered.
-- **`Something already answers on http://127.0.0.1:5173`** (from the driver): a Vite server is still running; it uses `strictPort`. Stop it by PID tree.
+- **`Something already answers on http://127.0.0.1:5173`** (from the driver): a Vite server is already running, often the developer's own `pnpm --filter @codifier/local-web dev`. Pass `--web-port 5179` instead of stopping it; stop it by PID tree only if it is a leftover from a driver run.
 - **`playwright-core not found`**: set `PLAYWRIGHT_CORE_DIR` to the directory where you ran `npm i playwright-core`.

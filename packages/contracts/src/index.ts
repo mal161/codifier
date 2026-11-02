@@ -159,6 +159,13 @@ export const intendedComponentMappingRequestSchema = z
   })
   .strict();
 
+/** Body for declaring that one intended component depends on another. */
+export const intendedComponentDependencyRequestSchema = z
+  .object({
+    targetComponentId: uuidSchema,
+  })
+  .strict();
+
 export const sourceFreshnessRequestSchema = z
   .object({
     rootPath: z.string().min(1).max(4_096),

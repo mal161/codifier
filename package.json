@@ -8,6 +8,7 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
+    "acceptance": "node apps/local-agent/node_modules/tsx/dist/cli.mjs fixtures/acceptance/walkthrough.ts",
     "check": "turbo run lint typecheck test",
     "format": "prettier --write \"**/*.{js,ts,tsx,json,yaml,yml}\"",
     "format:check": "prettier --check \"**/*.{js,ts,tsx,json,yaml,yml}\"",

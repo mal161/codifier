@@ -32,6 +32,7 @@ import {
   removeEntityMapping,
   revokeRuleException,
   restoreGraphRevision,
+  setIntendedDependency,
   startAnalysisJob,
   type GraphRevisionSummary,
   type SourceFreshness,
@@ -64,6 +65,7 @@ export function App() {
     string | null
   >(null);
   const [intendedComponentName, setIntendedComponentName] = useState("");
+  const [dependencyTargetId, setDependencyTargetId] = useState("");
   const [mapDisplay, setMapDisplay] = useState<"browse" | "map">("browse");
   const [activeView, setActiveView] = useState<
     "explorer" | "marketplace" | "rules"
@@ -97,6 +99,7 @@ export function App() {
     | "history-restore"
     | "history-export"
     | "exception-save"
+    | "intent-dependency"
     | null
   >(null);
   // History is tied to the graph object it was loaded for, so any later graph
@@ -656,6 +659,38 @@ export function App() {
     }
   }
 
+  async function changeIntendedDependency(
+    targetId: string,
+    action: "add" | "remove",
+  ): Promise<void> {
+    if (!snapshot || !selectedIntentComponent || !targetId) return;
+    const target = intendedComponents.find((item) => item.id === targetId);
+    setBusyAction("intent-dependency");
+    setError(null);
+    setNotice(null);
+    try {
+      const updatedSnapshot = await setIntendedDependency(
+        normalizeAgentUrl(agentUrl),
+        token,
+        snapshot.repositoryId,
+        selectedIntentComponent.id,
+        targetId,
+        action,
+      );
+      setSnapshot(updatedSnapshot);
+      setDependencyTargetId("");
+      setNotice(
+        action === "add"
+          ? `"${selectedIntentComponent.name}" now depends on "${target?.name ?? "component"}".`
+          : `Removed the dependency from "${selectedIntentComponent.name}" to "${target?.name ?? "component"}".`,
+      );
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function mapSelectedEntityToIntent(): Promise<void> {
     if (
       !snapshot ||
@@ -1127,6 +1162,19 @@ export function App() {
                       Add intended components to compare developer-authored
                       architecture with observed code.
                     </p>
+                  )}
+                  {selectedIntentComponent && intendedComponents.length > 1 && (
+                    <IntendedDependencies
+                      components={intendedComponents}
+                      isBusy={isBusy}
+                      onChange={(targetId, action) =>
+                        void changeIntendedDependency(targetId, action)
+                      }
+                      onTargetChange={setDependencyTargetId}
+                      selected={selectedIntentComponent}
+                      snapshot={snapshot}
+                      targetId={dependencyTargetId}
+                    />
                   )}
                 </section>
               )}
@@ -2616,6 +2664,109 @@ function GitContextCard({ context }: { context: GitContext | undefined }) {
         </p>
       )}
     </section>
+  );
+}
+
+function IntendedDependencies({
+  components,
+  isBusy,
+  onChange,
+  onTargetChange,
+  selected,
+  snapshot,
+  targetId,
+}: {
+  components: GraphEntity[];
+  isBusy: boolean;
+  onChange: (targetId: string, action: "add" | "remove") => void;
+  onTargetChange: (targetId: string) => void;
+  selected: GraphEntity;
+  snapshot: GraphSnapshot;
+  targetId: string;
+}) {
+  const dependencyIds = new Set(
+    snapshot.relationships
+      .filter(
+        (relationship) =>
+          relationship.sourceEntityId === selected.id &&
+          relationship.type === "DEPENDS_ON" &&
+          relationship.state === "intended",
+      )
+      .map((relationship) => relationship.targetEntityId),
+  );
+  const current = components.filter((item) => dependencyIds.has(item.id));
+  const available = components.filter(
+    (item) => item.id !== selected.id && !dependencyIds.has(item.id),
+  );
+  const selectId = `dependency-target-${selected.id}`;
+
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      <h3 className="text-[11px] font-semibold text-ink">
+        {selected.name} depends on
+      </h3>
+      {current.length > 0 ? (
+        <ul className="mt-2 space-y-1">
+          {current.map((item) => (
+            <li
+              className="flex items-center justify-between gap-2 rounded-lg bg-canvas px-3 py-1.5 text-xs"
+              key={item.id}
+            >
+              <span className="truncate">{item.name}</span>
+              <button
+                aria-label={`Remove dependency on ${item.name}`}
+                className="min-h-6 shrink-0 px-1 text-[11px] font-semibold text-forest underline underline-offset-2 disabled:opacity-45"
+                disabled={isBusy}
+                onClick={() => onChange(item.id, "remove")}
+                type="button"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-[11px] leading-5 text-muted">
+          No intended dependencies yet. Rules report observed dependencies that
+          are not declared here.
+        </p>
+      )}
+      {available.length > 0 && (
+        <form
+          className="mt-3 flex items-end gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (targetId) onChange(targetId, "add");
+          }}
+        >
+          <Field label="Add dependency on" htmlFor={selectId}>
+            <select
+              className={inputClass}
+              disabled={isBusy}
+              id={selectId}
+              onChange={(event) => onTargetChange(event.target.value)}
+              value={
+                available.some((item) => item.id === targetId) ? targetId : ""
+              }
+            >
+              <option value="">Choose a component</option>
+              {available.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <button
+            className={secondaryButtonClass}
+            disabled={isBusy || !available.some((item) => item.id === targetId)}
+            type="submit"
+          >
+            Add
+          </button>
+        </form>
+      )}
+    </div>
   );
 }
 

@@ -1,0 +1,5 @@
+{
+  "name": "@shop/shared",
+  "private": true,
+  "main": "src/types.ts"
+}
