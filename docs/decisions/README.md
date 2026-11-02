@@ -49,6 +49,8 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0019: VS Code Extension Host verification](0019-vscode-extension-host-verification.md) records the installed-VS-Code host test harness, VSIX verification, and the verified environment.
 
+[0020: Continuous integration](0020-continuous-integration.md) records the GitHub Actions matrix (Linux, macOS, Windows) for checks and the acceptance walkthrough.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?

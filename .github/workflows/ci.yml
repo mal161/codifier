@@ -1,0 +1,55 @@
+name: CI
+
+# Purpose and ownership: docs/decisions/0020-continuous-integration.md
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check + acceptance (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm (version from packageManager)
+        run: corepack enable
+
+      - name: Git identity for tests that create commits
+        run: |
+          git config --global user.name "Codifier CI"
+          git config --global user.email "ci@codifier.invalid"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint, typecheck, and test
+        run: pnpm check
+
+      - name: Acceptance walkthrough
+        run: pnpm acceptance -- --out acceptance-report
+
+      - name: Upload acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report-${{ matrix.os }}
+          path: acceptance-report/
+          if-no-files-found: ignore

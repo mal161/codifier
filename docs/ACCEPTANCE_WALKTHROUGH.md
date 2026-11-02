@@ -76,6 +76,6 @@ The first run reported a second unplanned dependency, Persistence → Shared con
 ## Limits
 
 - One fixture of 18 source files; not a performance or scale test.
-- Verified on Windows only. The walkthrough has no Windows-specific steps, but macOS and Linux runs are not yet recorded.
+- Verified locally on Windows. CI runs the walkthrough on Linux, macOS, and Windows on every push to `main` ([ADR 0020](decisions/0020-continuous-integration.md)); see the Actions tab for current results.
 - The offline guard covers the agent process. Browser and VS Code clients only talk to the loopback agent, but their own network behavior is not guarded here.
 - The walkthrough declares intended dependencies through the agent API. The web explorer offers the same action in its Intended architecture panel ("depends on" list with Add and Remove), verified by the `run-codifier` dependencies flow.
