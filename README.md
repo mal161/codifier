@@ -113,15 +113,22 @@ Use any of the three below; they all talk to the agent you just started.
 - **As a normal extension:** run `code --install-extension apps/vscode-extension/codifier-vscode-0.1.0.vsix`, then reload VS Code. To build a fresh package after changing the extension, run `pnpm --filter codifier-vscode exec vsce package --no-dependencies --allow-missing-repository` first.
 - **For extension development:** open this repository in VS Code and press **F5** (**Run Codifier Extension Host**). Use the new **[Extension Development Host]** window.
 
-**Use it** from the Command Palette (Ctrl+Shift+P):
+The Codifier VS Code extension is a thin client of the local Codifier agent. It never scans or parses your code itself; the agent does all the analysis. It adds five commands to the Command Palette (Ctrl+Shift+P):
 
-| Command | What it does |
-|---|---|
-| **Codifier: Connect to Local Agent** | Asks for the agent token and checks the connection. The agent address comes from the `codifier.agentUrl` setting (default `http://127.0.0.1:4141`) |
-| **Codifier: Show Connection Status** | Shows whether the agent is reachable; also opened by clicking **Codifier** in the status bar |
-| **Codifier: Analyze Workspace** | Analyzes the open folder and links it to its saved map |
-| **Codifier: Show Architecture for Current File** | Shows the graph items for the file you're editing |
-| **Codifier: Open Source from Architecture** | Lets you pick a graph item and opens its exact lines |
+1. **Codifier: Connect to Local Agent:** asks for the agent token, checks it against the agent's health endpoint, and saves it in VS Code's encrypted secret storage. It never goes in settings, URLs or logs. A wrong token is rejected and not stored. The agent address comes from the `codifier.agentUrl` setting (default `http://127.0.0.1:4141`).
+2. **Codifier: Show Connection Status:** confirms the agent is reachable, and shows which repository is linked to the open workspace, if any. A status bar item shows "Codifier: Connected" or "Disconnected".
+3. **Codifier: Analyze Workspace:**
+   - Starts an analysis through the agent's job system, with a progress notification you can cancel. Cancelling keeps the last saved graph.
+   - Links the resulting repository to that workspace folder.
+   - Writes a report (coverage, reasons a graph wasn't saved, diagnostics) to the Codifier output channel.
+   - With several folders open, asks which one to analyze.
+4. **Codifier: Show Architecture for Current File** (code to architecture):
+   - Checks the open file hasn't changed since analysis, then lists the files and symbols the graph has for it.
+   - Shows each item's line and column, and which intended component it's mapped to, if any.
+5. **Codifier: Open Source from Architecture** (architecture to code):
+   - Lets you pick any analyzed file or symbol from the graph.
+   - Checks the file hasn't changed since analysis, then opens it with the item's exact recorded range selected.
+   - Refuses a stale or unverifiable location instead of guessing, and refuses a workspace folder that isn't the one that was analyzed.
 
 Each analysis writes a full report (coverage, anything that blocked the save, and all diagnostics) to the **Codifier** output panel. See the [extension guide](apps/vscode-extension/README.md) for details.
 
