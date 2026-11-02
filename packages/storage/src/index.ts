@@ -8,7 +8,7 @@ import {
 } from "@codifier/domain";
 import { createHash, randomUUID } from "node:crypto";
 import BetterSqlite3 from "better-sqlite3";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import {
   drizzle,
   type BetterSQLite3Database,
@@ -19,6 +19,7 @@ import {
   analysisJobs,
   architectureRuleExceptions,
   entities,
+  graphHistoryPrunes,
   evidence as evidenceTable,
   graphRevisions,
   relationships,
@@ -65,6 +66,46 @@ export interface GraphHistoryExport {
   currentRevisionId: string | null;
   exportedAt: number;
   revisions: Array<GraphRevisionRecord & { snapshot: GraphSnapshot }>;
+  /** Audit of manual prunes; older revisions they removed are absent. */
+  prunes?: GraphHistoryPruneRecord[];
+}
+
+/** Audit entry written each time a person prunes old revisions. */
+export interface GraphHistoryPruneRecord {
+  id: string;
+  repositoryId: string;
+  removedCount: number;
+  oldestKeptSequence: number;
+  keepLast: number | null;
+  olderThan: number | null;
+  prunedAt: number;
+}
+
+export interface GraphHistoryPruneResult {
+  removedCount: number;
+  keptCount: number;
+  oldestKeptSequence: number;
+  prune: GraphHistoryPruneRecord | null;
+}
+
+export interface GraphHistoryImportResult {
+  repositoryId: string;
+  revisionCount: number;
+  currentRevisionId: string;
+}
+
+export class GraphHistoryError extends Error {
+  constructor(
+    public readonly code:
+      | "invalid_history"
+      | "repository_exists"
+      | "identifier_in_use"
+      | "invalid_prune",
+    message: string,
+  ) {
+    super(message);
+    this.name = "GraphHistoryError";
+  }
 }
 
 /**
@@ -144,6 +185,21 @@ export interface GraphStore {
     exceptionId: string,
     revocation: { revokedBy: string; reason: string },
   ): RuleExceptionRecord | null;
+  /**
+   * Imports an exported history into a repository this database does not
+   * have yet, re-verifying every revision. Throws GraphHistoryError.
+   */
+  importGraphHistory(history: GraphHistoryExport): GraphHistoryImportResult;
+  /**
+   * Deletes the oldest revisions that meet every given criterion, never the
+   * current one, and records an audit entry. Returns null for an unknown
+   * repository; throws GraphHistoryError for invalid options.
+   */
+  pruneGraphRevisions(
+    repositoryId: string,
+    options: { keepLast?: number; olderThan?: number },
+  ): GraphHistoryPruneResult | null;
+  listGraphHistoryPrunes(repositoryId: string): GraphHistoryPruneRecord[];
   getAnalysisJob(jobId: string): PersistedAnalysisJob | null;
   listAnalysisJobs(limit?: number): PersistedAnalysisJob[];
   saveAnalysisJob(job: Omit<PersistedAnalysisJob, "updatedAt">): void;
@@ -423,6 +479,7 @@ function createGraphStore(
             }
             return { ...record, snapshot };
           });
+        const prunes = store.listGraphHistoryPrunes(repositoryId);
         return {
           format: "codifier.graph-history" as const,
           formatVersion: 1 as const,
@@ -430,8 +487,305 @@ function createGraphStore(
           currentRevisionId: repository.currentGraphRevisionId,
           exportedAt: Date.now(),
           revisions,
+          ...(prunes.length > 0 ? { prunes } : {}),
         };
       });
+    },
+
+    importGraphHistory(history) {
+      const invalid = (message: string) =>
+        new GraphHistoryError("invalid_history", message);
+      if (
+        history?.format !== "codifier.graph-history" ||
+        history.formatVersion !== 1
+      ) {
+        throw invalid(
+          "Not a Codifier graph history export (format version 1).",
+        );
+      }
+      const { repositoryId, revisions } = history;
+      if (!Array.isArray(revisions) || revisions.length === 0) {
+        throw invalid("The export contains no revisions.");
+      }
+      const seen = new Set<string>();
+      revisions.forEach((revision, index) => {
+        const label = `Revision ${revision.sequence ?? index + 1}`;
+        if (revision.repositoryId !== repositoryId) {
+          throw invalid(`${label} belongs to a different repository.`);
+        }
+        if (seen.has(revision.id)) throw invalid(`${label} is duplicated.`);
+        const previous = revisions[index - 1];
+        if (previous && !(revision.sequence > previous.sequence)) {
+          throw invalid(`${label} is out of order.`);
+        }
+        const expectedParent = previous ? previous.id : null;
+        if (revision.parentRevisionId !== expectedParent) {
+          throw invalid(`${label} does not follow the previous revision.`);
+        }
+        if (
+          revision.restoredFromRevisionId !== null &&
+          revision.restoredFromRevisionId !== undefined &&
+          !seen.has(revision.restoredFromRevisionId)
+        ) {
+          throw invalid(
+            `${label} restores a revision that is not earlier in the export.`,
+          );
+        }
+        const snapshot = revision.snapshot;
+        if (snapshot?.repositoryId !== repositoryId) {
+          throw invalid(`${label} has a snapshot for a different repository.`);
+        }
+        const issues = validateGraphSnapshot(snapshot);
+        if (issues.length > 0) {
+          throw invalid(
+            `${label} violates graph invariants (${issues[0]!.code}).`,
+          );
+        }
+        if (hashSnapshot(snapshot) !== revision.contentHash) {
+          throw invalid(`${label} does not match its content hash.`);
+        }
+        seen.add(revision.id);
+      });
+      const current = revisions.at(-1)!;
+      if (history.currentRevisionId !== current.id) {
+        throw invalid(
+          "The current revision must be the latest revision in the export.",
+        );
+      }
+
+      return db.transaction((transaction) => {
+        const existing = transaction
+          .select({ id: repositories.id })
+          .from(repositories)
+          .where(eq(repositories.id, repositoryId))
+          .get();
+        if (existing) {
+          throw new GraphHistoryError(
+            "repository_exists",
+            "This repository already has a graph here. Import only restores a repository the agent does not have yet; local history is never replaced or merged.",
+          );
+        }
+        const inUse = (
+          table:
+            | typeof graphRevisions
+            | typeof entities
+            | typeof evidenceTable
+            | typeof relationships,
+          ids: string[],
+        ) => {
+          for (let start = 0; start < ids.length; start += 500) {
+            const chunk = ids.slice(start, start + 500);
+            if (chunk.length === 0) continue;
+            const hit = transaction
+              .select({ id: table.id })
+              .from(table)
+              .where(inArray(table.id, chunk))
+              .get();
+            if (hit) return true;
+          }
+          return false;
+        };
+        const snapshot = current.snapshot;
+        if (
+          inUse(
+            graphRevisions,
+            revisions.map((revision) => revision.id),
+          ) ||
+          inUse(
+            entities,
+            snapshot.entities.map((item) => item.id),
+          ) ||
+          inUse(
+            evidenceTable,
+            snapshot.evidence.map((item) => item.id),
+          ) ||
+          inUse(
+            relationships,
+            snapshot.relationships.map((item) => item.id),
+          )
+        ) {
+          throw new GraphHistoryError(
+            "identifier_in_use",
+            "Some identifiers in this export already belong to another repository in this database.",
+          );
+        }
+
+        transaction
+          .insert(repositories)
+          .values({
+            id: repositoryId,
+            revision: snapshot.revision,
+            gitContextJson: snapshot.gitContext
+              ? JSON.stringify(snapshot.gitContext)
+              : null,
+            updatedAt: new Date(),
+          })
+          .run();
+        for (const revision of revisions) {
+          transaction
+            .insert(graphRevisions)
+            .values({
+              id: revision.id,
+              repositoryId,
+              parentRevisionId: revision.parentRevisionId,
+              sequence: revision.sequence,
+              sourceRevision: revision.sourceRevision ?? null,
+              contentHash: revision.contentHash,
+              changeSummaryJson: JSON.stringify(revision.changeSummary),
+              snapshotJson: JSON.stringify(revision.snapshot),
+              restoredFromRevisionId: revision.restoredFromRevisionId ?? null,
+              createdAt: new Date(revision.createdAt),
+            })
+            .run();
+        }
+        writeCurrentGraph(transaction, snapshot);
+        transaction
+          .update(repositories)
+          .set({ currentGraphRevisionId: current.id })
+          .where(eq(repositories.id, repositoryId))
+          .run();
+        for (const prune of history.prunes ?? []) {
+          transaction
+            .insert(graphHistoryPrunes)
+            .values({
+              id: randomUUID(),
+              repositoryId,
+              removedCount: prune.removedCount,
+              oldestKeptSequence: prune.oldestKeptSequence,
+              keepLast: prune.keepLast,
+              olderThan:
+                prune.olderThan === null ? null : new Date(prune.olderThan),
+              prunedAt: new Date(prune.prunedAt),
+            })
+            .run();
+        }
+        return {
+          repositoryId,
+          revisionCount: revisions.length,
+          currentRevisionId: current.id,
+        };
+      });
+    },
+
+    pruneGraphRevisions(repositoryId, options) {
+      const { keepLast, olderThan } = options;
+      if (keepLast === undefined && olderThan === undefined) {
+        throw new GraphHistoryError(
+          "invalid_prune",
+          "Choose how many revisions to keep, an age cutoff, or both.",
+        );
+      }
+      if (
+        keepLast !== undefined &&
+        (!Number.isSafeInteger(keepLast) || keepLast < 1)
+      ) {
+        throw new GraphHistoryError(
+          "invalid_prune",
+          "keepLast must be a positive integer.",
+        );
+      }
+      if (olderThan !== undefined && !Number.isFinite(olderThan)) {
+        throw new GraphHistoryError(
+          "invalid_prune",
+          "olderThan must be a timestamp.",
+        );
+      }
+      return db.transaction((transaction) => {
+        const repository = transaction
+          .select({ current: repositories.currentGraphRevisionId })
+          .from(repositories)
+          .where(eq(repositories.id, repositoryId))
+          .get();
+        if (!repository) return null;
+        const ordered = transaction
+          .select({
+            id: graphRevisions.id,
+            sequence: graphRevisions.sequence,
+            createdAt: graphRevisions.createdAt,
+          })
+          .from(graphRevisions)
+          .where(eq(graphRevisions.repositoryId, repositoryId))
+          .orderBy(asc(graphRevisions.sequence))
+          .all();
+        // A revision is removed only if every given criterion selects it;
+        // both criteria select a prefix, and the latest revision always stays.
+        const limits = [ordered.length - 1];
+        if (keepLast !== undefined)
+          limits.push(Math.max(0, ordered.length - keepLast));
+        if (olderThan !== undefined) {
+          const firstRecent = ordered.findIndex(
+            (revision) => revision.createdAt.getTime() >= olderThan,
+          );
+          limits.push(firstRecent === -1 ? ordered.length : firstRecent);
+        }
+        const count = Math.max(0, Math.min(...limits));
+        const removed = ordered.slice(0, count).map((revision) => revision.id);
+        if (removed.includes(repository.current ?? "")) {
+          throw new StorageCorruptionError(
+            "Prune would remove the current revision.",
+          );
+        }
+        const oldestKept = ordered[count];
+        if (count === 0 || !oldestKept) {
+          return {
+            removedCount: 0,
+            keptCount: ordered.length,
+            oldestKeptSequence: ordered[0]?.sequence ?? 0,
+            prune: null,
+          };
+        }
+        for (let start = 0; start < removed.length; start += 500) {
+          const chunk = removed.slice(start, start + 500);
+          transaction
+            .update(graphRevisions)
+            .set({ restoredFromRevisionId: null })
+            .where(
+              and(
+                eq(graphRevisions.repositoryId, repositoryId),
+                inArray(graphRevisions.restoredFromRevisionId, chunk),
+              ),
+            )
+            .run();
+        }
+        transaction
+          .update(graphRevisions)
+          .set({ parentRevisionId: null })
+          .where(eq(graphRevisions.id, oldestKept.id))
+          .run();
+        // Delete newest-first so no remaining row references a deleted parent.
+        for (const id of [...removed].reverse()) {
+          transaction
+            .delete(graphRevisions)
+            .where(eq(graphRevisions.id, id))
+            .run();
+        }
+        const row = {
+          id: randomUUID(),
+          repositoryId,
+          removedCount: count,
+          oldestKeptSequence: oldestKept.sequence,
+          keepLast: keepLast ?? null,
+          olderThan: olderThan === undefined ? null : new Date(olderThan),
+          prunedAt: new Date(),
+        };
+        transaction.insert(graphHistoryPrunes).values(row).run();
+        return {
+          removedCount: count,
+          keptCount: ordered.length - count,
+          oldestKeptSequence: oldestKept.sequence,
+          prune: toPruneRecord(row),
+        };
+      });
+    },
+
+    listGraphHistoryPrunes(repositoryId) {
+      return db
+        .select()
+        .from(graphHistoryPrunes)
+        .where(eq(graphHistoryPrunes.repositoryId, repositoryId))
+        .orderBy(asc(graphHistoryPrunes.prunedAt), asc(graphHistoryPrunes.id))
+        .all()
+        .map(toPruneRecord);
     },
 
     listRuleExceptions(repositoryId) {
@@ -548,6 +902,74 @@ function createGraphStore(
       sqlite.close();
     },
   };
+
+  /** Replaces the normalized current-graph rows for a repository. */
+  function writeCurrentGraph(
+    transaction: Transaction,
+    snapshot: GraphSnapshot,
+  ): void {
+    transaction
+      .delete(relationships)
+      .where(eq(relationships.repositoryId, snapshot.repositoryId))
+      .run();
+    transaction
+      .delete(entities)
+      .where(eq(entities.repositoryId, snapshot.repositoryId))
+      .run();
+    transaction
+      .delete(evidenceTable)
+      .where(eq(evidenceTable.repositoryId, snapshot.repositoryId))
+      .run();
+
+    if (snapshot.evidence.length > 0) {
+      transaction
+        .insert(evidenceTable)
+        .values(
+          snapshot.evidence.map((item) => ({
+            id: item.id,
+            repositoryId: snapshot.repositoryId,
+            origin: item.origin,
+            description: item.description,
+            sourceJson: item.source ? JSON.stringify(item.source) : null,
+          })),
+        )
+        .run();
+    }
+
+    if (snapshot.entities.length > 0) {
+      transaction
+        .insert(entities)
+        .values(
+          snapshot.entities.map((entity) => ({
+            id: entity.id,
+            repositoryId: snapshot.repositoryId,
+            kind: entity.kind,
+            name: entity.name,
+            state: entity.state,
+            evidenceIdsJson: JSON.stringify(entity.evidenceIds),
+            sourceJson: entity.source ? JSON.stringify(entity.source) : null,
+          })),
+        )
+        .run();
+    }
+
+    if (snapshot.relationships.length > 0) {
+      transaction
+        .insert(relationships)
+        .values(
+          snapshot.relationships.map((relationship) => ({
+            id: relationship.id,
+            repositoryId: snapshot.repositoryId,
+            sourceEntityId: relationship.sourceEntityId,
+            targetEntityId: relationship.targetEntityId,
+            type: relationship.type,
+            state: relationship.state,
+            evidenceIdsJson: JSON.stringify(relationship.evidenceIds),
+          })),
+        )
+        .run();
+    }
+  }
 
   function commitSnapshot(
     snapshot: GraphSnapshot,
@@ -691,67 +1113,7 @@ function createGraphStore(
         .where(eq(repositories.id, snapshot.repositoryId))
         .run();
 
-      transaction
-        .delete(relationships)
-        .where(eq(relationships.repositoryId, snapshot.repositoryId))
-        .run();
-      transaction
-        .delete(entities)
-        .where(eq(entities.repositoryId, snapshot.repositoryId))
-        .run();
-      transaction
-        .delete(evidenceTable)
-        .where(eq(evidenceTable.repositoryId, snapshot.repositoryId))
-        .run();
-
-      if (snapshot.evidence.length > 0) {
-        transaction
-          .insert(evidenceTable)
-          .values(
-            snapshot.evidence.map((item) => ({
-              id: item.id,
-              repositoryId: snapshot.repositoryId,
-              origin: item.origin,
-              description: item.description,
-              sourceJson: item.source ? JSON.stringify(item.source) : null,
-            })),
-          )
-          .run();
-      }
-
-      if (snapshot.entities.length > 0) {
-        transaction
-          .insert(entities)
-          .values(
-            snapshot.entities.map((entity) => ({
-              id: entity.id,
-              repositoryId: snapshot.repositoryId,
-              kind: entity.kind,
-              name: entity.name,
-              state: entity.state,
-              evidenceIdsJson: JSON.stringify(entity.evidenceIds),
-              sourceJson: entity.source ? JSON.stringify(entity.source) : null,
-            })),
-          )
-          .run();
-      }
-
-      if (snapshot.relationships.length > 0) {
-        transaction
-          .insert(relationships)
-          .values(
-            snapshot.relationships.map((relationship) => ({
-              id: relationship.id,
-              repositoryId: snapshot.repositoryId,
-              sourceEntityId: relationship.sourceEntityId,
-              targetEntityId: relationship.targetEntityId,
-              type: relationship.type,
-              state: relationship.state,
-              evidenceIdsJson: JSON.stringify(relationship.evidenceIds),
-            })),
-          )
-          .run();
-      }
+      writeCurrentGraph(transaction, snapshot);
 
       if (commit.committedJob) {
         transaction
@@ -792,6 +1154,24 @@ function toRuleExceptionRecord(
     revokedAt: row.revokedAt?.getTime() ?? null,
     revokedBy: row.revokedBy,
     revokeReason: row.revokeReason,
+  };
+}
+
+type Transaction = Parameters<
+  Parameters<BetterSQLite3Database<typeof schema>["transaction"]>[0]
+>[0];
+
+function toPruneRecord(
+  row: typeof graphHistoryPrunes.$inferSelect,
+): GraphHistoryPruneRecord {
+  return {
+    id: row.id,
+    repositoryId: row.repositoryId,
+    removedCount: row.removedCount,
+    oldestKeptSequence: row.oldestKeptSequence,
+    keepLast: row.keepLast,
+    olderThan: row.olderThan?.getTime() ?? null,
+    prunedAt: row.prunedAt.getTime(),
   };
 }
 

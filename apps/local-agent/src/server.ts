@@ -17,6 +17,8 @@ import {
   analyzeRepositoryRequestSchema,
   graphSnapshotSchema,
   installArchitectureTemplateRequestSchema,
+  graphHistoryExportSchema,
+  graphHistoryPruneRequestSchema,
   intendedComponentDependencyRequestSchema,
   intendedComponentMappingRequestSchema,
   intendedComponentRequestSchema,
@@ -38,6 +40,7 @@ import { timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import {
+  GraphHistoryError,
   RuleExceptionConflictError,
   type GraphStore,
   type PersistedAnalysisJob,
@@ -626,6 +629,79 @@ export function createAgentServer(
           `attachment; filename="codifier-history-${repositoryId}.json"`,
         )
         .send(exported);
+    },
+  );
+
+  // History documents carry full snapshots, so this route alone accepts
+  // bodies larger than the agent-wide 1 MiB limit.
+  app.post(
+    "/v1/history/import",
+    { bodyLimit: 67_108_864 },
+    async (request, reply) => {
+      const parsed = graphHistoryExportSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_history",
+          message: "The file is not a valid Codifier graph history export.",
+          issues: parsed.error.issues.slice(0, 20).map(({ path, message }) => ({
+            path,
+            message,
+          })),
+        });
+      }
+      try {
+        const result = options.store.importGraphHistory(parsed.data);
+        events.emit("graph.updated", result.repositoryId, null);
+        return reply.code(201).send(result);
+      } catch (error) {
+        if (error instanceof GraphHistoryError) {
+          return reply
+            .code(error.code === "invalid_history" ? 400 : 409)
+            .send({ error: error.code, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: RepositoryParams }>(
+    "/v1/repositories/:repositoryId/revisions/prune",
+    async (request, reply) => {
+      const repositoryId = parseRepositoryId(request.params.repositoryId);
+      if (!repositoryId) {
+        return reply.code(400).send({ error: "invalid_repository_id" });
+      }
+      const parsed = graphHistoryPruneRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_prune",
+          message: parsed.error.issues[0]?.message ?? "Invalid prune request.",
+        });
+      }
+      if (
+        [...analysisJobs.values()].some(
+          ({ value }) =>
+            value.repositoryId === repositoryId && isActiveJob(value.status),
+        )
+      ) {
+        return reply.code(409).send({
+          error: "analysis_already_running",
+          message:
+            "Wait for or cancel the running analysis before pruning history.",
+        });
+      }
+      const result = options.store.pruneGraphRevisions(repositoryId, {
+        ...(parsed.data.keepLast !== undefined
+          ? { keepLast: parsed.data.keepLast }
+          : {}),
+        ...(parsed.data.olderThanDays !== undefined
+          ? { olderThan: Date.now() - parsed.data.olderThanDays * 86_400_000 }
+          : {}),
+      });
+      if (!result) {
+        return reply.code(404).send({ error: "repository_not_found" });
+      }
+      return result;
     },
   );
 

@@ -136,6 +136,9 @@ Run these from the repository root in a terminal where `CODIFIER_AGENT_TOKEN` is
 | `pnpm --filter @codifier/local-agent start -- analyze <repo-path> <uuid>` | Re-analyzes a repository into its existing map |
 | `pnpm --filter @codifier/local-agent start -- graph get <uuid>` | Prints the saved map as JSON |
 | `pnpm --filter @codifier/local-agent start -- graph put <file.json>` | Validates and replaces a saved map from a JSON file |
+| `pnpm --filter @codifier/local-agent start -- graph history <uuid> > history.json` | Exports a map's full revision history |
+| `pnpm --filter @codifier/local-agent start -- graph import-history <history.json>` | Restores an exported history on a machine that doesn't have that map yet |
+| `pnpm --filter @codifier/local-agent start -- graph prune <uuid> --keep-last <n>` | Deletes old revisions (never the current one); nothing is deleted automatically |
 
 Set `CODIFIER_AGENT_URL` if the agent isn't on the default `http://127.0.0.1:4141`. The REST API that clients use is described in [development setup](docs/DEVELOPMENT_SETUP.md).
 

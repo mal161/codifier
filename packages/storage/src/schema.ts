@@ -25,6 +25,16 @@ export const architectureRuleExceptions = sqliteTable(
   },
 );
 
+export const graphHistoryPrunes = sqliteTable("graph_history_prunes", {
+  id: text("id").primaryKey(),
+  repositoryId: text("repository_id").notNull(),
+  removedCount: integer("removed_count").notNull(),
+  oldestKeptSequence: integer("oldest_kept_sequence").notNull(),
+  keepLast: integer("keep_last"),
+  olderThan: integer("older_than", { mode: "timestamp_ms" }),
+  prunedAt: integer("pruned_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export const repositories = sqliteTable("repositories", {
   id: text("id").primaryKey(),
   revision: text("revision"),

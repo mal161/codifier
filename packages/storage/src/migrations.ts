@@ -130,6 +130,23 @@ const migrations: Migration[] = [
         WHERE revoked_at IS NULL`,
     ],
   },
+  {
+    id: "0007_graph_history_prunes",
+    statements: [
+      `CREATE TABLE graph_history_prunes (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        removed_count INTEGER NOT NULL CHECK (removed_count > 0),
+        oldest_kept_sequence INTEGER NOT NULL,
+        keep_last INTEGER CHECK (keep_last IS NULL OR keep_last > 0),
+        older_than INTEGER,
+        pruned_at INTEGER NOT NULL,
+        CHECK (keep_last IS NOT NULL OR older_than IS NOT NULL)
+      )`,
+      `CREATE INDEX graph_history_prunes_repository
+        ON graph_history_prunes(repository_id, pruned_at)`,
+    ],
+  },
 ];
 
 export function applyMigrations(database: BetterSqlite3.Database): void {

@@ -64,7 +64,7 @@ WCAG 2.2 Level A and AA review recorded in [ACCESSIBILITY_REVIEW.md](ACCESSIBILI
 - Every refresh re-reads all files; only changed files are re-parsed while the agent runs; no file watcher.
 - Single machine; no sync, sharing, or multi-user features (ADR 0021). Rule-exception authors are self-attested.
 - VS Code extension verified only on Windows with VS Code 1.144.0; the declared floor of 1.90.0 is untested. Web explorer verified only in Chromium.
-- Graph history can be exported but not imported; no retention or pruning policy yet (needs a decision).
+- History import works only for repositories the agent does not have yet; prune and import are available through the API and CLI, not the web explorer. History is kept until someone prunes it; there is no automatic limit (ADR 0022).
 - Browser token pairing is manual (paste the token); tokens are not rotated automatically.
 - No standalone installers or signed packages; run from source.
 - AI features in the planning documents are not implemented.

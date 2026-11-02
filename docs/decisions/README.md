@@ -53,12 +53,14 @@ The current accepted architecture is [0006: Local companion agent and user-direc
 
 [0021: Defer cloud sync](0021-defer-cloud-sync-intent-only-scope.md) records that sync is out of the first release and, when built, syncs intent only and rejects stale edits.
 
+[0022: History import and manual retention](0022-history-import-and-manual-retention.md) records import into new repositories only, and pruning only on explicit request with an audit trail.
+
 ## Open decisions
 
 1. What narrow first user workflow and measurable success targets define a useful MVP?
 2. Which TypeScript/JavaScript constructs and React/Express conventions are supported initially?
 3. What repository inventory rules apply to ignore files, generated/vendor content, symlinks, and oversized files?
-4. What snapshot retention, backup/export, and full recovery policy is appropriate beyond the initial SQLite revision/job history?
+4. Revision retention is manual and history import restores into new repositories (ADR 0022). Job-record retention beyond the 50-record bound and automated backups remain open.
 5. Cloud sync is deferred (ADR 0021), with intent-only scope and reject-stale conflicts decided. Sync event schema, workspace identity, retention, export, and deletion remain open for when sync is selected.
 6. What token lifecycle and browser pairing/Host/Origin rules protect local REST/WebSockets?
 7. Is an AI provider part of the first release? If so, what data may be sent and under what opt-in?

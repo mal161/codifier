@@ -106,6 +106,52 @@ graph
   });
 
 graph
+  .command("import-history <historyFile>")
+  .description(
+    "Import an exported history into a repository this agent does not have yet",
+  )
+  .action(async (historyFile: string) => {
+    const contents = await readFile(resolve(historyFile), "utf8");
+    const response = await agentFetch("/v1/history/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: contents,
+    });
+    await printResponse(response);
+  });
+
+graph
+  .command("prune <repositoryId>")
+  .description(
+    "Delete the oldest revisions that meet every given limit; the current revision is always kept",
+  )
+  .option("--keep-last <count>", "Keep at least this many recent revisions")
+  .option("--older-than-days <days>", "Only delete revisions older than this")
+  .action(
+    async (
+      repositoryId: string,
+      options: { keepLast?: string; olderThanDays?: string },
+    ) => {
+      const response = await agentFetch(
+        `/v1/repositories/${encodeURIComponent(repositoryId)}/revisions/prune`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...(options.keepLast !== undefined
+              ? { keepLast: Number(options.keepLast) }
+              : {}),
+            ...(options.olderThanDays !== undefined
+              ? { olderThanDays: Number(options.olderThanDays) }
+              : {}),
+          }),
+        },
+      );
+      await printResponse(response);
+    },
+  );
+
+graph
   .command("put <snapshotFile>")
   .description("Validate and replace the graph snapshot from a JSON file")
   .action(async (snapshotFile: string) => {

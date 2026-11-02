@@ -24,5 +24,5 @@ Clients obtain it through authenticated `GET /v1/repositories/<repository-uuid>/
 ## Consequences
 
 - History can be inspected or archived outside the agent without granting database access.
-- Importing an export into a new database is not implemented; recovery currently means inspecting the file or restoring revisions that are still in the database. Import needs its own identity and conflict rules.
+- Importing an export into a database that lacks the repository was added in [ADR 0022](0022-history-import-and-manual-retention.md); exports now also carry prune audit records.
 - Large histories are serialized in memory; measure before relying on this for long-lived repositories.

@@ -5,7 +5,7 @@ This plan reconciles the two supplied implementation specifications with the cur
 ## Current baseline verified in this worktree
 
 - `packages/analysis-core` performs bounded TypeScript/JavaScript syntax analysis and returns a replacement snapshot. It has identity reconciliation, repository-root and symlink checks, but no file watcher or changed-file analysis pipeline.
-- `packages/storage` keeps normalized current graph rows and appends validated SQLite snapshot revisions in the same transaction (ADR 0009). Authenticated routes list revisions, retrieve earlier snapshots, and restore one as a new revision (ADR 0014), and export verified history (ADR 0015); the web explorer lists, restores, and exports revisions. History import and retention are not implemented.
+- `packages/storage` keeps normalized current graph rows and appends validated SQLite snapshot revisions in the same transaction (ADR 0009). Authenticated routes list revisions, retrieve earlier snapshots, and restore one as a new revision (ADR 0014), export verified history (ADR 0015), import it into a database that lacks the repository, and prune old revisions on request (ADR 0022); the web explorer lists, restores, and exports revisions.
 - Agent analysis job requests, progress, and outcomes now persist. On restart, queued/running jobs are marked failed with a retry message; resume-from-checkpoint and failure-injection verification remain unimplemented.
 - The local web app supports graph-to-source URI opening and explicit source-location lookup. Phase 4 adds a local-agent fingerprint check before enabling the VS Code link; there is still no VS Code extension or automatic background freshness monitoring.
 - Intended components and observed mappings exist. A general intended-vs-actual discrepancy review and documented exception lifecycle are not implemented.
@@ -56,7 +56,8 @@ This plan reconciles the two supplied implementation specifications with the cur
 - Add migrations, export/recovery behavior, retention notes, and failure-injection coverage.
 - **Implemented:** restore commits a verified earlier snapshot as a new revision with `restored_from_revision_id`; an identical restore is a no-op. Storage tests cover ordering across reopen, tampered history, rollback of a mid-transaction constraint failure, and duplicate job retries ([ADR 0014](decisions/0014-graph-revision-restore.md)).
 - **Implemented:** verified history export through the agent, the CLI (`graph history`), and the web explorer ([ADR 0015](decisions/0015-graph-history-export.md)); a web revision-history card with confirm-before-restore; an agent test for the restore-while-analyzing `409`.
-- **Pending:** history import into a new database, a retention/pruning policy (needs a decision), a VS Code restore control, and a manual browser check of the history card.
+- **Implemented:** history import into a database that lacks the repository, with full re-verification, and manual retention: nothing is deleted automatically, and a prune removes only the oldest revisions meeting every given criterion, never the current one, with an audit record ([ADR 0022](decisions/0022-history-import-and-manual-retention.md)).
+- **Pending:** a VS Code restore control; prune and import controls in the web explorer (available through the API and CLI).
 
 **Exit gate:** restart and injected failures preserve revision ordering and graph validity; retries do not create duplicate semantic revisions; restore creates a new revision and does not erase history.
 

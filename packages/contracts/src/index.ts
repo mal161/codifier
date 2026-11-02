@@ -309,6 +309,77 @@ export const reviewedArchitectureRuleEvaluationSchema = z
   })
   .strict();
 
+const changeGroupSchema = z
+  .object({
+    added: z.array(z.string().min(1)),
+    changed: z.array(z.string().min(1)),
+    removed: z.array(z.string().min(1)),
+  })
+  .strict();
+
+/** A `codifier.graph-history` v1 document as produced by history export. */
+export const graphHistoryExportSchema = z
+  .object({
+    format: z.literal("codifier.graph-history"),
+    formatVersion: z.literal(1),
+    repositoryId: uuidSchema,
+    currentRevisionId: uuidSchema.nullable(),
+    exportedAt: z.number().int().nonnegative(),
+    revisions: z
+      .array(
+        z
+          .object({
+            id: uuidSchema,
+            repositoryId: uuidSchema,
+            parentRevisionId: uuidSchema.nullable(),
+            sequence: z.number().int().positive(),
+            sourceRevision: z.string().nullable(),
+            contentHash: z.string().regex(/^[0-9a-f]{64}$/),
+            changeSummary: z
+              .object({
+                entities: changeGroupSchema,
+                relationships: changeGroupSchema,
+                evidence: changeGroupSchema,
+              })
+              .strict(),
+            restoredFromRevisionId: uuidSchema.nullable(),
+            createdAt: z.number().int().nonnegative(),
+            snapshot: graphSnapshotSchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(100_000),
+    prunes: z
+      .array(
+        z
+          .object({
+            id: uuidSchema,
+            repositoryId: uuidSchema,
+            removedCount: z.number().int().positive(),
+            oldestKeptSequence: z.number().int().positive(),
+            keepLast: z.number().int().positive().nullable(),
+            olderThan: z.number().int().nullable(),
+            prunedAt: z.number().int().nonnegative(),
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict();
+
+/** Manual prune: remove the oldest revisions that meet every given criterion. */
+export const graphHistoryPruneRequestSchema = z
+  .object({
+    keepLast: z.number().int().min(1).max(1_000_000).optional(),
+    olderThanDays: z.number().int().min(1).max(36_500).optional(),
+  })
+  .strict()
+  .refine(
+    (value) => value.keepLast !== undefined || value.olderThanDays !== undefined,
+    { message: "Provide keepLast, olderThanDays, or both." },
+  );
+
 export type RuleException = z.infer<typeof ruleExceptionSchema>;
 export type ReviewedArchitectureRuleEvaluation = z.infer<
   typeof reviewedArchitectureRuleEvaluationSchema

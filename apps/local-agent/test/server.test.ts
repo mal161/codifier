@@ -231,6 +231,96 @@ describe("local agent API", () => {
     expect(exported.currentRevisionId).toBe(exported.revisions[1]!.id);
   });
 
+  it("imports an exported history into a fresh agent and refuses duplicates", async () => {
+    const source = await startTestServer();
+    const sourceStore = stores.at(-1)!;
+    sourceStore.replaceGraph(createSnapshot());
+    sourceStore.replaceGraph(createSnapshot("updated"));
+    const exported = await (
+      await fetch(
+        `${source.baseUrl}/v1/repositories/${repositoryId}/history/export`,
+        {
+          headers: headers(),
+        },
+      )
+    ).json();
+
+    const target = await startTestServer();
+    const targetStore = stores.at(-1)!;
+    const importHistory = (body: unknown) =>
+      fetch(`${target.baseUrl}/v1/history/import`, {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    const tampered = structuredClone(exported);
+    tampered.revisions[0].contentHash = "0".repeat(64);
+    const rejected = await importHistory(tampered);
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ error: "invalid_history" });
+    expect(targetStore.getGraph(repositoryId)).toBeNull();
+    expect((await importHistory({ format: "other" })).status).toBe(400);
+
+    const created = await importHistory(exported);
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual({
+      repositoryId,
+      revisionCount: 2,
+      currentRevisionId: exported.currentRevisionId,
+    });
+    expect(targetStore.getGraph(repositoryId)).toEqual(
+      createSnapshot("updated"),
+    );
+    expect(targetStore.listGraphRevisions(repositoryId)).toEqual(
+      sourceStore.listGraphRevisions(repositoryId),
+    );
+
+    const duplicate = await importHistory(exported);
+    expect(duplicate.status).toBe(409);
+    expect(await duplicate.json()).toMatchObject({
+      error: "repository_exists",
+    });
+  });
+
+  it("prunes old revisions on request and keeps the current one", async () => {
+    const { baseUrl } = await startTestServer();
+    const store = stores.at(-1)!;
+    for (const name of ["a", "b", "c", "d"])
+      store.replaceGraph(createSnapshot(name));
+    const prune = (target: string, body: unknown) =>
+      fetch(`${baseUrl}/v1/repositories/${target}/revisions/prune`, {
+        method: "POST",
+        headers: { ...headers(), "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    const empty = await prune(repositoryId, {});
+    expect(empty.status).toBe(400);
+    expect(await empty.json()).toMatchObject({ error: "invalid_prune" });
+    expect((await prune(repositoryId, { keepLast: 0 })).status).toBe(400);
+    expect(
+      (await prune("00000000-0000-4000-8000-000000000000", { keepLast: 1 }))
+        .status,
+    ).toBe(404);
+
+    const pruned = await prune(repositoryId, { keepLast: 1 });
+    expect(pruned.status).toBe(200);
+    expect(await pruned.json()).toMatchObject({
+      removedCount: 3,
+      keptCount: 1,
+      oldestKeptSequence: 4,
+    });
+    expect(store.listGraphRevisions(repositoryId)).toHaveLength(1);
+    expect(store.getGraph(repositoryId)).toEqual(createSnapshot("d"));
+    // Nothing is old enough: an age-only prune removes nothing.
+    expect(
+      await (await prune(repositoryId, { olderThanDays: 1 })).json(),
+    ).toMatchObject({
+      removedCount: 0,
+    });
+  });
+
   it("refuses to restore a revision while an analysis job is active", async () => {
     const { baseUrl } = await startTestServer();
     const store = stores.at(-1)!;
