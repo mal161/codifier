@@ -13,7 +13,9 @@
 
 Environment: Windows 11, Microsoft Edge (Chromium) headless via playwright-core 1.49.1, viewports 1440×1000 and 320×800, `prefers-reduced-motion: reduce` emulated so scroll positions are measured after scrolling completes. Reproduce with the `run-codifier` skill: `node .claude/skills/run-codifier/driver.mjs --flow a11y`, which writes `a11y-report.json` and screenshots.
 
-Not performed: screen-reader testing (NVDA, JAWS, VoiceOver, TalkBack), speech-input testing, Windows high-contrast mode, 200% browser zoom on a physical display, and testing with users with disabilities. Results below that depend on assistive-technology behavior are therefore inferred from markup, not observed.
+Screen-reader testing (added 2026-11-02): NVDA 2026.2 with Microsoft Edge 156 on Windows 11 — see [Screen-reader testing](#screen-reader-testing) below.
+
+Not performed: JAWS, VoiceOver, TalkBack, speech-input testing, Windows high-contrast mode, 200% browser zoom on a physical display, and testing with users with disabilities.
 
 ## Findings and fixes
 
@@ -28,6 +30,9 @@ Not performed: screen-reader testing (NVDA, JAWS, VoiceOver, TalkBack), speech-i
 | A7 | 2.5.8 Target Size (Minimum) | "Dismiss message" control was 48×20 px; attribution link 47×14 px. | Dismiss gets `min-h-6`; attribution link padded to 24 px. | scripted target check |
 | A8 | 2.5.3 Label in Name | Header home link name "Codifier codebase map home" did not contain its visible text; "Copy location" and "Open in VS Code" names did not contain theirs as a phrase. | Visible text now starts each accessible name; decorative logo mark hidden from assistive technology. | axe `label-content-name-mismatch`: 0 |
 | A9 | 4.1.2 Name, Role, Value | Disabled "Open in VS Code" `<a>` without `href` had no role, so its label was not reliably exposed. | `role="link"` with `aria-disabled` while unavailable. | axe (no longer reported) |
+| A12 | 4.1.3 Status Messages | Found by NVDA, missed by inspection: the status message region was `display: none` while empty, so it was not in the accessibility tree and success messages ("Connected to the local agent.", "Saved graph loaded…") were never announced. | Always-present, visually hidden `status` (notices) and `alert` (errors) regions inside the toast. | NVDA announces each message |
+| A13 | 2.4.3 Focus Order | Found by NVDA: activating a control that is replaced by other content ("Show revision history", "Restore this revision", "Record exception", removing a dependency) dropped focus to the page ("document … unknown"), losing the user's place. | Focus moves to the revealed content (revision list, Confirm button, first form field, dependency picker) and back to the trigger on Cancel or close. "Restore this revision" became a disclosure button (`aria-expanded`) that stays mounted so focus never falls back to the page. | NVDA announces the expected target; no stray "document" announcements |
+| A14 | 2.4.3 Focus Order | Found by NVDA: switching views (Explore, Marketplace, Rules) replaced the main content without telling screen-reader users; focus stayed on the navigation button ("current page"). | Focus moves to the new view's level-1 heading. | NVDA announces "Architecture rules, heading level 1" |
 | A11 | 4.1.2 Name, Role, Value | React Flow's controls panel had `aria-label` on a `<div>` without a role (axe "needs review"), and the library offers no role prop. | The panel is given `role="group"` after render. | axe: no longer reported |
 | A10 | 2.3.3 (AAA, advisory) | Smooth scrolling and transitions ignored the reduced-motion preference. | `motion-safe:scroll-smooth` and a reduced-motion reset for transitions and animations. | stable repeated audits under reduced motion |
 
@@ -61,7 +66,7 @@ Status values: **Pass** (automated or scripted evidence), **Pass (inspection)** 
 | 2.3.1 Three Flashes | Pass (inspection) | No flashing content. |
 | 2.4.1 Bypass Blocks | Pass | Landmarks present; axe `bypass` passes. |
 | 2.4.2 Page Titled | Pass | `Codifier — Codebase map`. |
-| 2.4.3 Focus Order | Pass | Tab order follows visual order in every audited state. |
+| 2.4.3 Focus Order | Fixed | A13, A14. Tab order follows visual order in every audited state; focus is now managed when content is replaced or the view changes (verified with NVDA). |
 | 2.4.4 Link Purpose (In Context) | Pass | Link names describe their destination. |
 | 2.4.5 Multiple Ways | N/A | Single-page tool with persistent primary navigation. |
 | 2.4.6 Headings and Labels | Pass (inspection) | Descriptive headings and labels. |
@@ -87,11 +92,39 @@ Status values: **Pass** (automated or scripted evidence), **Pass (inspection)** 
 | 3.3.7 Redundant Entry | Pass (inspection) | The reviewer name is remembered across exception forms within the page. |
 | 3.3.8 Accessible Authentication (Minimum) | Pass (inspection) | The token field allows paste and password managers; no cognitive test. |
 | 4.1.2 Name, Role, Value | Fixed | A9, A11. |
-| 4.1.3 Status Messages | Pass (inspection) | Status messages use `role="status"` (errors `role="alert"`) in a live region without moving focus. |
+| 4.1.3 Status Messages | Fixed | A12. The earlier "Pass (inspection)" was wrong: the markup looked right but NVDA showed messages were not announced. Now verified with NVDA. |
+
+## Screen-reader testing
+
+Environment: NVDA 2026.2 (installed from NV Access with winget), Microsoft Edge 156.0.4314.58, Windows 11, default NVDA settings except first-run dialogs and say-all-on-page-load disabled. Run with `node .claude/skills/run-codifier/driver.mjs --flow screenreader`, which starts NVDA with speech logging, drives the explorer by keyboard in a visible Edge window, and compares what NVDA spoke during each step with expected phrases (`screenreader-report.json`, `nvda.log`).
+
+Final run: 18/18 steps announced as expected.
+
+| Step | NVDA announced |
+|---|---|
+| Agent address field | "Agent address, edit" with its value |
+| Tab to token field | "Agent token, edit, protected" |
+| Tab to connect button | "Connect to agent, button" |
+| Connect | "Agent connected", "Connected to the local agent." |
+| Load saved | "Saved graph loaded from the local agent." |
+| Show revision history | "Revision history region, Show revision history, button" |
+| History opens | "Graph revisions, newest first, list with 2 items" |
+| Restore button | "Restore this revision, button, collapsed" |
+| Activate restore | "Confirm restore of revision 1, button" |
+| Tab | "Cancel, button" |
+| Cancel | "Restore this revision, button, collapsed" |
+| Rules navigation | "banner landmark, Primary navigation landmark, Rules, button" |
+| Open Rules | "main landmark, Architecture rules region, Architecture rules, heading level 1" |
+| Record exception | "list with 1 item, Record exception, button" |
+| Open the form | "Record exception form landmark", "Your name, edit, required, blank" |
+| Rationale field | "Why is this finding acceptable?, edit, required, multi line, blank" |
+| Save | "Exception recorded. The finding stays listed with your rationale; the graph was not changed.", then "Revoke exception, button" |
+
+The first NVDA run found A12–A14; all three were fixed and re-verified. Limits of this testing: key presses come from Playwright and reach the browser without passing through NVDA, so it verifies focus-mode announcements (focus changes, activation, live regions) but not NVDA browse-mode commands (headings with H, arrow-key reading, elements list). One stray "document … unknown" announcement observed during development came from the test calling `focus()` programmatically, not from the app; the final run drives Cancel by keyboard and has none.
 
 ## Open items
 
-1. Screen-reader passes on NVDA + Edge and VoiceOver + Safari for the analyze, rules-exception, dependency, and restore flows.
+1. Browse-mode reading with NVDA (headings, landmarks, arrow keys) by a person, and VoiceOver + Safari and JAWS passes.
 2. Keep the audit current: re-run `--flow a11y` for UI changes and record new results here.
 
 Updated 2026-11-02 (Phase 8): 1.4.12 tested and passing; React Flow controls naming fixed.

@@ -90,6 +90,15 @@ pnpm check
 
 This runs lint, typecheck and test through Turbo: 21 tasks across 7 packages, all passing. One analysis-core symlink test skips itself when Windows refuses to create symlinks (EPERM). pnpm may print `Could not lock the dependency install ... Access is denied` or `ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK` while an agent or Vite process is running. The tasks still succeed.
 
+## Run: screen-reader check (NVDA, Windows)
+
+```bash
+winget install --id NVAccess.NVDA -e --accept-package-agreements --accept-source-agreements --silent
+PLAYWRIGHT_CORE_DIR="$TEMP/codifier-pw" node .claude/skills/run-codifier/driver.mjs --flow screenreader --web-port 5179 --out "$TEMP/codifier-sr"
+```
+
+Starts NVDA with a throwaway config and speech logging (`-l 12`), opens a visible Edge window, drives the explorer by keyboard, and checks the phrases NVDA spoke during each step (`screenreader-report.json`, `nvda.log` in `--out`). NVDA speaks aloud and Edge takes the foreground for about two minutes; do not use the mouse or keyboard meanwhile. `NVDA_EXE` overrides `C:\Program Files\NVDA\nvda.exe`.
+
 ## Gotchas
 
 - **Port 4141 is often the developer's own agent.** `serve` then fails with `EADDRINUSE`, and the browser talks to their agent and gets CORS or `origin_not_allowed` errors. The driver uses 4198 and types that address into the page's **Agent address** field. The page defaults to `:4141`.
@@ -101,6 +110,9 @@ This runs lint, typecheck and test through Turbo: 21 tasks across 7 packages, al
 - **Accessibility audit artifacts look like real failures.** Smooth scrolling makes focus-position probes read off-screen coordinates, and a disabled button fading back in (`transition` + `disabled:opacity-45`) can be sampled mid-fade as low contrast. The a11y flow emulates reduced motion and the app honours it; if you see focus "obscured" by content far down the page, check `scrollY` in the report before fixing code.
 - **Extension Host suites must load from inside the extension under test.** Each extension gets its own `vscode` API object; stubbing the suite's copy does not affect the extension, so a real input box appears and the run waits forever. The runner copies the suite into an installed extension for `--extension-path`, the suite refuses to run from outside, and the runner stops a host after 180 s.
 - **Windows paths differ by form.** `os.tmpdir()` can return an 8.3 short path (`ALEXMW~1`) and VS Code reports a lower-case drive letter (`c:\`); compare resolved, case-insensitive paths.
+- **NVDA cannot be started with Node's `spawn`** (`EACCES`): `nvda.exe` requests uiAccess, which Windows grants only via ShellExecute. `screenreader.mjs` starts and stops it with PowerShell `Start-Process`.
+- **NVDA's say-all on page load moves focus** and makes the first Tab land on the page header. The test config sets `autoSayAllOnPageLoad = False`.
+- **Playwright `locator.focus()` can make NVDA announce "document … unknown"** before the target. Drive steps with key presses (Tab, Enter) when judging focus behavior; use `focus()` only to position.
 - **Git context reads "Uncommitted changes"** whenever this repository's working tree is dirty, because the fixture lives inside it. That is expected.
 
 ## Troubleshooting

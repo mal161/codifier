@@ -44,7 +44,7 @@ Not reviewed: a formal threat model, penetration testing, or supply-chain proven
 
 ## Accessibility
 
-WCAG 2.2 Level A and AA review recorded in [ACCESSIBILITY_REVIEW.md](ACCESSIBILITY_REVIEW.md): zero axe violations in six UI states; keyboard, focus visibility, focus not obscured at 1440 and 320 px, target size, reflow, and text spacing checked by script. Not done: testing with screen readers, speech input, or users with disabilities.
+WCAG 2.2 Level A and AA review recorded in [ACCESSIBILITY_REVIEW.md](ACCESSIBILITY_REVIEW.md): zero axe violations in six UI states; keyboard, focus visibility, focus not obscured at 1440 and 320 px, target size, reflow, and text spacing checked by script. Screen-reader testing with NVDA 2026.2 and Edge 156 (18/18 steps) found and fixed unannounced status messages and lost focus when content is replaced or views change. Not done: NVDA browse-mode reading by a person, JAWS, VoiceOver, speech input, and testing with users with disabilities.
 
 ## Regression run on the release tree
 

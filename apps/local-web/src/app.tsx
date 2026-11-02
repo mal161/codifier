@@ -1,4 +1,11 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { FormEvent, ReactNode } from "react";
 import type {
   Evidence,
@@ -70,6 +77,16 @@ export function App() {
   const [activeView, setActiveView] = useState<
     "explorer" | "marketplace" | "rules"
   >("explorer");
+  // A view change replaces the main content; move focus to its heading so
+  // screen-reader users hear where they are (skipped on first render).
+  const viewRendered = useRef(false);
+  useLayoutEffect(() => {
+    if (!viewRendered.current) {
+      viewRendered.current = true;
+      return;
+    }
+    document.getElementById(`view-heading-${activeView}`)?.focus();
+  }, [activeView]);
   const [marketplaceTemplates, setMarketplaceTemplates] = useState<
     ArchitectureTemplate[]
   >([]);
@@ -912,7 +929,11 @@ export function App() {
                     <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-forest">
                       Workspace
                     </p>
-                    <h1 className="mt-1 text-xl font-semibold tracking-[-0.04em]">
+                    <h1
+                      className="mt-1 text-xl font-semibold tracking-[-0.04em] outline-none"
+                      id="view-heading-explorer"
+                      tabIndex={-1}
+                    >
                       Explore a codebase
                     </h1>
                   </div>
@@ -1526,29 +1547,39 @@ export function App() {
           </>
         )}
 
+        {/* WCAG 4.1.3: the live regions stay in the accessibility tree while
+            empty (visually hidden), so screen readers announce new messages.
+            Notices are polite; errors use an assertive alert. */}
         <div
-          aria-live="polite"
-          className={`fixed bottom-5 left-1/2 z-10 w-[min(90vw,540px)] -translate-x-1/2 rounded-xl border px-4 py-3 text-sm shadow-lg ${
-            error
-              ? "border-red-200 bg-red-50 text-red-800"
-              : notice
-                ? "border-green-200 bg-green-50 text-green-900"
-                : "hidden"
-          }`}
-          role={error ? "alert" : "status"}
+          className={
+            error || notice
+              ? `fixed bottom-5 left-1/2 z-10 w-[min(90vw,540px)] -translate-x-1/2 rounded-xl border px-4 py-3 text-sm shadow-lg ${
+                  error
+                    ? "border-red-200 bg-red-50 text-red-800"
+                    : "border-green-200 bg-green-50 text-green-900"
+                }`
+              : "sr-only"
+          }
         >
-          {error ?? notice}
-          <button
-            aria-label="Dismiss message"
-            className="ml-3 inline-flex min-h-6 items-center px-1 font-semibold underline underline-offset-2"
-            onClick={() => {
-              setError(null);
-              setNotice(null);
-            }}
-            type="button"
-          >
-            Dismiss
-          </button>
+          <span aria-atomic="true" role="status">
+            {error ? "" : (notice ?? "")}
+          </span>
+          <span aria-atomic="true" role="alert">
+            {error ?? ""}
+          </span>
+          {(error || notice) && (
+            <button
+              aria-label="Dismiss message"
+              className="ml-3 inline-flex min-h-6 items-center px-1 font-semibold underline underline-offset-2"
+              onClick={() => {
+                setError(null);
+                setNotice(null);
+              }}
+              type="button"
+            >
+              Dismiss
+            </button>
+          )}
         </div>
       </main>
     </div>
@@ -1612,7 +1643,11 @@ function MarketplacePage({
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-forest">
               Local catalog
             </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-ink">
+            <h1
+              className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-ink outline-none"
+              id="view-heading-marketplace"
+              tabIndex={-1}
+            >
               Architecture marketplace
             </h1>
             <p className="mt-3 text-sm leading-6 text-muted">
@@ -1859,7 +1894,11 @@ function ArchitectureRulesPage({
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-forest">
               Local graph review
             </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-ink">
+            <h1
+              className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-ink outline-none"
+              id="view-heading-rules"
+              tabIndex={-1}
+            >
               Architecture rules
             </h1>
             <p className="mt-3 text-sm leading-6 text-muted">
@@ -2174,6 +2213,16 @@ function RuleExceptionPanel({
   reviewer: string;
 }) {
   const [mode, setMode] = useState<"idle" | "record" | "revoke">("idle");
+  // The toggle button and the form replace each other; move focus so
+  // keyboard and screen-reader users are not dropped onto the page.
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const previousMode = useRef(mode);
+  useLayoutEffect(() => {
+    if (mode !== "idle") firstFieldRef.current?.focus();
+    else if (previousMode.current !== "idle") toggleRef.current?.focus();
+    previousMode.current = mode;
+  }, [mode]);
   const [text, setText] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
   const idPrefix = `exception-${finding.findingKey.slice(0, 12)}`;
@@ -2237,6 +2286,7 @@ function RuleExceptionPanel({
           className={`${secondaryButtonClass} mt-2`}
           disabled={isSaving}
           onClick={() => setMode(exception ? "revoke" : "record")}
+          ref={toggleRef}
           type="button"
         >
           {exception ? "Revoke exception" : "Record exception"}
@@ -2255,6 +2305,7 @@ function RuleExceptionPanel({
               className={inputClass}
               id={`${idPrefix}-reviewer`}
               maxLength={120}
+              ref={firstFieldRef}
               onChange={(event) => onReviewerChange(event.target.value)}
               required
               value={reviewer}
@@ -2699,10 +2750,24 @@ function IntendedDependencies({
     (item) => item.id !== selected.id && !dependencyIds.has(item.id),
   );
   const selectId = `dependency-target-${selected.id}`;
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const previousCount = useRef(current.length);
+  useLayoutEffect(() => {
+    // The Remove button that had focus no longer exists.
+    if (current.length < previousCount.current) {
+      (selectRef.current ?? headingRef.current)?.focus();
+    }
+    previousCount.current = current.length;
+  }, [current.length]);
 
   return (
     <div className="mt-4 border-t border-line pt-3">
-      <h3 className="text-[11px] font-semibold text-ink">
+      <h3
+        className="text-[11px] font-semibold text-ink outline-none"
+        ref={headingRef}
+        tabIndex={-1}
+      >
         {selected.name} depends on
       </h3>
       {current.length > 0 ? (
@@ -2745,6 +2810,7 @@ function IntendedDependencies({
               disabled={isBusy}
               id={selectId}
               onChange={(event) => onTargetChange(event.target.value)}
+              ref={selectRef}
               value={
                 available.some((item) => item.id === targetId) ? targetId : ""
               }
@@ -2786,6 +2852,25 @@ function RevisionHistoryCard({
   revisions: GraphRevisionSummary[] | null;
 }) {
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // Buttons here replace each other; keep focus on something meaningful.
+  const listRef = useRef<HTMLOListElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const restoreButtons = useRef(new Map<string, HTMLButtonElement>());
+  const returnFocus = useRef<"list" | null>(null);
+  const wasLoaded = useRef(revisions !== null);
+  useLayoutEffect(() => {
+    if (
+      revisions !== null &&
+      (!wasLoaded.current || returnFocus.current === "list")
+    ) {
+      listRef.current?.focus();
+      returnFocus.current = null;
+    }
+    wasLoaded.current = revisions !== null;
+  }, [revisions]);
+  useLayoutEffect(() => {
+    if (pendingId) confirmRef.current?.focus();
+  }, [pendingId]);
   const current = revisions?.at(-1);
   const ordered = revisions ? [...revisions].reverse() : [];
   const sequenceOf = (id: string | null) =>
@@ -2829,7 +2914,12 @@ function RevisionHistoryCard({
             Restoring saves an earlier graph as a new revision. Nothing is
             deleted.
           </p>
-          <ol className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+          <ol
+            aria-label="Graph revisions, newest first"
+            className="mt-3 max-h-72 space-y-2 overflow-y-auto outline-none"
+            ref={listRef}
+            tabIndex={-1}
+          >
             {ordered.map((revision) => {
               const isCurrent = revision.id === current?.id;
               const restoredFrom = sequenceOf(revision.restoredFromRevisionId);
@@ -2864,41 +2954,61 @@ function RevisionHistoryCard({
                       ? ` · source ${revision.sourceRevision.slice(0, 12)}`
                       : ""}
                   </p>
-                  {!isCurrent &&
-                    (pendingId === revision.id ? (
-                      <div className="mt-2 flex gap-2">
-                        <button
-                          className={primaryButtonClass}
-                          disabled={isBusy}
-                          onClick={() => {
-                            setPendingId(null);
-                            onRestore(revision);
-                          }}
-                          type="button"
-                        >
-                          Confirm restore of revision {revision.sequence}
-                        </button>
-                        <button
-                          className={secondaryButtonClass}
-                          disabled={isBusy}
-                          onClick={() => setPendingId(null)}
-                          type="button"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
+                  {!isCurrent && (
+                    <>
+                      {/* Disclosure: the restore button stays mounted, so
+                            focus never falls back to the page. */}
                       <button
+                        aria-controls={`confirm-restore-${revision.id}`}
+                        aria-expanded={pendingId === revision.id}
                         className={`${secondaryButtonClass} mt-2`}
                         disabled={isBusy}
                         onClick={() => setPendingId(revision.id)}
+                        ref={(element) => {
+                          if (element)
+                            restoreButtons.current.set(revision.id, element);
+                          else restoreButtons.current.delete(revision.id);
+                        }}
                         type="button"
                       >
                         {busyAction === "history-restore"
                           ? "Restoring…"
                           : "Restore this revision"}
                       </button>
-                    ))}
+                      {pendingId === revision.id && (
+                        <div
+                          className="mt-2 flex gap-2"
+                          id={`confirm-restore-${revision.id}`}
+                        >
+                          <button
+                            className={primaryButtonClass}
+                            disabled={isBusy}
+                            onClick={() => {
+                              returnFocus.current = "list";
+                              setPendingId(null);
+                              onRestore(revision);
+                            }}
+                            ref={confirmRef}
+                            type="button"
+                          >
+                            Confirm restore of revision {revision.sequence}
+                          </button>
+                          <button
+                            className={secondaryButtonClass}
+                            disabled={isBusy}
+                            onClick={() => {
+                              // Move focus first; Cancel is then removed.
+                              restoreButtons.current.get(revision.id)?.focus();
+                              setPendingId(null);
+                            }}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </li>
               );
             })}

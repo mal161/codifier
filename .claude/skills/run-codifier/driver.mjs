@@ -30,7 +30,16 @@ const flag = (name, fallback) => {
 };
 const keep = args.includes("--keep");
 const flow = flag("--flow", "all");
-if (!["all", "history", "exceptions", "dependencies", "a11y"].includes(flow)) {
+if (
+  ![
+    "all",
+    "history",
+    "exceptions",
+    "dependencies",
+    "a11y",
+    "screenreader",
+  ].includes(flow)
+) {
   throw new Error(
     `--flow must be all, history, exceptions, or a11y (got ${flow}).`,
   );
@@ -718,7 +727,23 @@ process.on("unhandledRejection", (reason) => {
 try {
   await launchServers();
   const repositoryId = await seedGraph();
-  await driveHistoryFlow(repositoryId);
+  if (flow === "screenreader") {
+    const { runScreenReaderFlow } = await import("./screenreader.mjs");
+    const results = await runScreenReaderFlow({
+      chromium: loadPlaywright().chromium,
+      webUrl,
+      agentUrl,
+      token,
+      repositoryId,
+      out,
+      log,
+    });
+    if (results.some((result) => !result.pass)) {
+      throw new Error("Some screen-reader announcements were missing.");
+    }
+  } else {
+    await driveHistoryFlow(repositoryId);
+  }
   log(`PASS - screenshots in ${out}`);
   if (keep) {
     log(
