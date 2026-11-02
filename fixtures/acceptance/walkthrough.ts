@@ -588,9 +588,13 @@ async function main(): Promise<void> {
   step("Edit the source");
   const cartRoute = join(shop, "server", "src", "routes", "cart.ts");
   const cartService = join(shop, "server", "src", "services", "cartService.ts");
+  // A Windows checkout may convert the fixture to CRLF (core.autocrlf);
+  // normalize so the edit applies on every platform.
   writeFileSync(
     cartRoute,
     readFileSync(cartRoute, "utf8")
+      .split("\r\n")
+      .join("\n")
       .replace(
         'import { addToCart, getCart } from "../services/cartService";\nimport { cartRepository } from "../db/cartRepository";',
         'import { addToCart, clearCart as clearUserCart, getCart } from "../services/cartService";',
